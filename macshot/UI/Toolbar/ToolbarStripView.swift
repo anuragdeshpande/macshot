@@ -1,8 +1,8 @@
 import Cocoa
 
 /// Real NSView container for a row (horizontal) or column (vertical) of ToolbarButtonViews.
-/// Dark rounded background matching the existing toolbar look.
-class ToolbarStripView: NSView {
+/// Dark rounded background matching the existing toolbar look, or hosted on Liquid Glass.
+class ToolbarStripView: NSView, ChromeContent {
 
     enum Orientation { case horizontal, vertical }
 
@@ -26,6 +26,10 @@ class ToolbarStripView: NSView {
 
     private let padding: CGFloat = 4
     private let spacing: CGFloat = 2
+
+    /// When hosted in a Liquid Glass chrome panel or inline glass host, the glass
+    /// provides the background, so the strip skips its own solid fill (ChromeContent).
+    var hostedInGlassPanel = false { didSet { needsDisplay = true } }
 
     init(orientation: Orientation) {
         self.orientation = orientation
@@ -98,7 +102,9 @@ class ToolbarStripView: NSView {
     func updateState(from buttons: [ToolbarButton]) {
         for (i, data) in buttons.enumerated() where i < buttonViews.count {
             buttonViews[i].configure(with: data)
+            buttonViews[i].needsDisplay = true
         }
+        needsDisplay = true
     }
 
     private func layoutButtons() {
@@ -130,6 +136,8 @@ class ToolbarStripView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        // When hosted in a glass container, the NSGlassEffectView renders the background.
+        if hostedInGlassPanel { return }
         ToolbarLayout.bgColor.setFill()
         NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
     }

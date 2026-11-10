@@ -8,13 +8,17 @@ class EditorTopBarView: NSView {
     private var sizeLabel: NSTextField!
     private var zoomButton: NSButton!
     private var doneButton: NSButton?
+    private var actionButtons: [NSButton] = []
+    private let contentContainer = NSView()
+    private var glassHost: NSView?
     var onDone: (() -> Void)?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         autoresizingMask = [.width, .minYMargin]  // pin to top, stretch width
-        layer?.backgroundColor = ToolbarLayout.bgColor.cgColor
+        contentContainer.frame = bounds
+        contentContainer.autoresizingMask = [.width, .height]
 
         sizeLabel = makeLabel("")
         sizeLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
@@ -24,6 +28,7 @@ class EditorTopBarView: NSView {
         let flipHBtn = makeButton("arrow.left.and.right.righttriangle.left.righttriangle.right", tooltip: L("Flip Horizontal"), action: #selector(flipHClicked))
         let flipVBtn = makeButton("arrow.up.and.down.righttriangle.up.righttriangle.down", tooltip: L("Flip Vertical"), action: #selector(flipVClicked))
         let addCaptureBtn = makeButton("rectangle.badge.plus", tooltip: L("Add Capture"), action: #selector(addCaptureClicked))
+        actionButtons = [cropBtn, flipHBtn, flipVBtn, addCaptureBtn]
 
         // Zoom dropdown button
         zoomButton = NSButton()
@@ -40,48 +45,106 @@ class EditorTopBarView: NSView {
         border.wantsLayer = true
         border.layer?.backgroundColor = NSColor(white: 0.25, alpha: 1.0).cgColor
         border.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(border)
+        contentContainer.addSubview(border)
 
-        // Layout with constraints
+        // Layout with constraints inside contentContainer
         for v: NSView in [sizeLabel, cropBtn, flipHBtn, flipVBtn, addCaptureBtn, zoomButton] {
             v.translatesAutoresizingMaskIntoConstraints = false
-            addSubview(v)
+            contentContainer.addSubview(v)
         }
 
         NSLayoutConstraint.activate([
             heightAnchor.constraint(equalToConstant: 32),
 
-            sizeLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            sizeLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            sizeLabel.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor, constant: 12),
+            sizeLabel.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
 
             cropBtn.leadingAnchor.constraint(equalTo: sizeLabel.trailingAnchor, constant: 16),
-            cropBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            cropBtn.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
             cropBtn.widthAnchor.constraint(equalToConstant: 24),
             cropBtn.heightAnchor.constraint(equalToConstant: 22),
 
             flipHBtn.leadingAnchor.constraint(equalTo: cropBtn.trailingAnchor, constant: 4),
-            flipHBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            flipHBtn.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
             flipHBtn.widthAnchor.constraint(equalToConstant: 24),
             flipHBtn.heightAnchor.constraint(equalToConstant: 22),
 
             flipVBtn.leadingAnchor.constraint(equalTo: flipHBtn.trailingAnchor, constant: 4),
-            flipVBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            flipVBtn.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
             flipVBtn.widthAnchor.constraint(equalToConstant: 24),
             flipVBtn.heightAnchor.constraint(equalToConstant: 22),
 
             addCaptureBtn.leadingAnchor.constraint(equalTo: flipVBtn.trailingAnchor, constant: 12),
-            addCaptureBtn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            addCaptureBtn.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
             addCaptureBtn.widthAnchor.constraint(equalToConstant: 24),
             addCaptureBtn.heightAnchor.constraint(equalToConstant: 22),
 
-            zoomButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            zoomButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            zoomButton.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor, constant: -12),
+            zoomButton.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
 
-            border.leadingAnchor.constraint(equalTo: leadingAnchor),
-            border.trailingAnchor.constraint(equalTo: trailingAnchor),
-            border.bottomAnchor.constraint(equalTo: bottomAnchor),
+            border.leadingAnchor.constraint(equalTo: contentContainer.leadingAnchor),
+            border.trailingAnchor.constraint(equalTo: contentContainer.trailingAnchor),
+            border.bottomAnchor.constraint(equalTo: contentContainer.bottomAnchor),
             border.heightAnchor.constraint(equalToConstant: 0.5),
         ])
+
+        applyTheme()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleToolbarColorsChanged),
+            name: .toolbarColorsDidChange, object: nil)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func layout() {
+        super.layout()
+        if let glassHost {
+            LiquidGlass.syncHost(glassHost, in: self)
+        } else {
+            contentContainer.frame = bounds
+        }
+    }
+
+    @objc private func handleToolbarColorsChanged() {
+        applyTheme()
+        sizeLabel.textColor = ToolbarLayout.iconColor.withAlphaComponent(0.45)
+        zoomButton.contentTintColor = ToolbarLayout.iconColor.withAlphaComponent(0.45)
+        for btn in actionButtons {
+            btn.contentTintColor = ToolbarLayout.iconColor.withAlphaComponent(0.85)
+        }
+        doneButton?.contentTintColor = ToolbarLayout.accentColor
+    }
+
+    private func applyTheme() {
+        if LiquidGlass.isEnabled {
+            layer?.backgroundColor = NSColor.clear.cgColor
+            if glassHost == nil {
+                contentContainer.removeFromSuperview()
+                if let host = LiquidGlass.host(contentContainer, frame: bounds, cornerRadius: 0) {
+                    host.autoresizingMask = [.width, .height]
+                    addSubview(host)
+                    glassHost = host
+                } else {
+                    contentContainer.frame = bounds
+                    addSubview(contentContainer)
+                }
+            }
+            LiquidGlass.syncHost(glassHost, in: self)
+        } else {
+            if let host = glassHost {
+                contentContainer.removeFromSuperview()
+                host.removeFromSuperview()
+                glassHost = nil
+            }
+            if contentContainer.superview !== self {
+                contentContainer.frame = bounds
+                contentContainer.autoresizingMask = [.width, .height]
+                addSubview(contentContainer)
+            }
+            layer?.backgroundColor = ToolbarLayout.bgColor.cgColor
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -205,10 +268,10 @@ class EditorTopBarView: NSView {
         btn.target = self
         btn.action = #selector(doneClicked)
         btn.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(btn)
+        contentContainer.addSubview(btn)
         NSLayoutConstraint.activate([
             btn.trailingAnchor.constraint(equalTo: zoomButton.leadingAnchor, constant: -12),
-            btn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            btn.centerYAnchor.constraint(equalTo: contentContainer.centerYAnchor),
         ])
         doneButton = btn
     }

@@ -100,6 +100,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     private var accentColorWell: NSColorWell!
     private var iconColorWell: NSColorWell!
     private var bgColorWell: NSColorWell!
+    private var appearanceStylePopup: NSPopUpButton?
     private var themePresetPopup: NSPopUpButton!
     private var quickModePopup: NSPopUpButton!
     private var quickCaptureOpenEditorCheckbox: NSButton!
@@ -523,6 +524,19 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         stack.addArrangedSubview(sectionHeader(L("Appearance")))
         stack.setCustomSpacing(10, after: stack.arrangedSubviews.last!)
 
+        // Appearance style dropdown (macOS 26+ only): Default vs Liquid Glass.
+        if LiquidGlass.isAvailable {
+            let stylePopup = NSPopUpButton()
+            stylePopup.addItem(withTitle: L("Default"))
+            stylePopup.addItem(withTitle: "Liquid Glass")
+            stylePopup.selectItem(at: LiquidGlass.isEnabled ? 1 : 0)
+            stylePopup.target = self
+            stylePopup.action = #selector(appearanceStyleChanged(_:))
+            appearanceStylePopup = stylePopup
+            stack.addArrangedSubview(indented(labeledRow("\(L("Style")):", controls: [stylePopup])))
+            stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
+        }
+
         // Theme preset dropdown
         themePresetPopup = NSPopUpButton()
         for preset in ThemePreset.all {
@@ -547,6 +561,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
 
         bgColorWell = NSColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 32))
         bgColorWell.color = ToolbarLayout.bgColor
+        bgColorWell.isEnabled = !LiquidGlass.isEnabled
         bgColorWell.target = self
         bgColorWell.action = #selector(bgColorChanged(_:))
 
@@ -2712,6 +2727,8 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         accentColorWell.color = ToolbarLayout.accentColor
         iconColorWell.color = ToolbarLayout.iconColor
         bgColorWell.color = ToolbarLayout.bgColor
+        bgColorWell.isEnabled = !LiquidGlass.isEnabled
+        appearanceStylePopup?.selectItem(at: LiquidGlass.isEnabled ? 1 : 0)
 
         let historySize = UserDefaults.standard.object(forKey: "historySize") as? Int ?? 10
         historySizeField.integerValue = historySize
@@ -3047,6 +3064,11 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         if sender.state == .on { if !enabled.contains(sender.tag) { enabled.append(sender.tag) } }
         else { enabled.removeAll { $0 == sender.tag } }
         UserDefaults.standard.set(enabled, forKey: key)
+    }
+    @objc private func appearanceStyleChanged(_ sender: NSPopUpButton) {
+        LiquidGlass.setEnabled(sender.indexOfSelectedItem == 1)
+        bgColorWell.isEnabled = !LiquidGlass.isEnabled
+        notifyToolbarColorChange()
     }
     @objc private func accentColorChanged(_ sender: NSColorWell) {
         ToolbarLayout.saveAccentColor(sender.color)

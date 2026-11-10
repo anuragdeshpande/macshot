@@ -451,7 +451,9 @@ class OverlayView: NSView {
                 bottomStripView?.isHidden = true
                 rightStripView?.isHidden = true
                 toolOptionsRowView?.isHidden = true
-                dismissResolutionBox()
+                // Dismiss any glass chrome panels so they don't linger as empty
+                // clickable child windows (e.g. after clearSelection).
+                teardownGlassChromePanels()
                 optionsRowRect = .zero
             }
         }
@@ -460,6 +462,13 @@ class OverlayView: NSView {
     private var rightStripView: ToolbarStripView?
     private var toolOptionsRowView: ToolOptionsRowView?
 
+    /// Liquid Glass: when the glass theme is on, each toolbar surface is hosted
+    /// in an NSGlassEffectView container via its presenter.
+    private let bottomChrome = OverlayChromePresenter(cornerRadius: 10)
+    private let rightChrome = OverlayChromePresenter(cornerRadius: 10)
+    private let optionsChrome = OverlayChromePresenter(cornerRadius: 10)
+    private let resolutionChrome = OverlayChromePresenter(cornerRadius: 10, keyCapable: true)
+    private let preSelectionPresetChrome = OverlayChromePresenter(cornerRadius: 6)
     /// Intended overlay-space rect of the options row. .zero when the row is hidden.
     private var optionsRowRect: NSRect = .zero
     // Resolution box (W × H fields + presets). Replaces the old drawn size badge.
@@ -1181,9 +1190,11 @@ class OverlayView: NSView {
     }
 
     @objc private func handleToolbarColorsChanged() {
-        // Rebuild toolbars and options row with new colors.
+        // Rebuild toolbars and options row with new colors. The row owns its own
+        // background via hostedInGlassPanel (clear when glass-hosted, solid
+        // otherwise), so re-assert it from that flag rather than guessing here.
         if let row = toolOptionsRowView {
-            row.layer?.backgroundColor = ToolbarLayout.bgColor.cgColor
+            row.layer?.backgroundColor = row.hostedInGlassPanel ? NSColor.clear.cgColor : ToolbarLayout.bgColor.cgColor
         }
         toolOptionsRowView?.appearance = ToolbarLayout.appearance
         rebuildToolbarLayout()
@@ -1582,14 +1593,20 @@ class OverlayView: NSView {
         // here would compare coordinates in different spaces and cause false matches.
         if !isEditorMode {
             let localPoint = convert(point, from: superview)
-            if let strip = bottomStripView, !strip.isHidden, strip.frame.contains(localPoint) {
+            if let strip = bottomStripView, !strip.isHidden, bottomBarRect.contains(localPoint) {
                 return strip.hitTest(convert(point, to: strip.superview))
             }
-            if let strip = rightStripView, !strip.isHidden, strip.frame.contains(localPoint) {
+            if let strip = rightStripView, !strip.isHidden, rightBarRect.contains(localPoint) {
                 return strip.hitTest(convert(point, to: strip.superview))
             }
-            if let row = toolOptionsRowView, !row.isHidden, row.frame.contains(localPoint) {
+            if let row = toolOptionsRowView, !row.isHidden, optionsRowRect.width > 1, optionsRowRect.contains(localPoint) {
                 return row.hitTest(convert(point, to: row.superview))
+            }
+            if let box = resolutionBox, !box.isHidden, resolutionBoxRect.width > 1, resolutionBoxRect.contains(localPoint) {
+                return box.hitTest(convert(point, to: box.superview))
+            }
+            if let btn = preSelectionPresetButton, !btn.isHidden, preSelectionPresetButtonRect.width > 1, preSelectionPresetButtonRect.contains(localPoint) {
+                return btn.hitTest(convert(point, to: btn.superview))
             }
         }
         if let event = NSApp.currentEvent, shouldRouteTextEditorDoubleClickToCopy(event: event, at: point) {
@@ -1627,6 +1644,11 @@ class OverlayView: NSView {
         if let bottomStripView, view === bottomStripView { return true }
         if let rightStripView, view === rightStripView { return true }
         if let toolOptionsRowView, view === toolOptionsRowView { return true }
+        if let host = bottomChrome.glassHost, view === host { return true }
+        if let host = rightChrome.glassHost, view === host { return true }
+        if let host = optionsChrome.glassHost, view === host { return true }
+        if let host = resolutionChrome.glassHost, view === host { return true }
+        if let host = preSelectionPresetChrome.glassHost, view === host { return true }
         return false
     }
 
@@ -2658,9 +2680,15 @@ class OverlayView: NSView {
         box.setDimensions(w: px.w, h: px.h)
         box.setActivePresetLabel(preSelectionPresetDisplayLabel)
 
-        // Inline: a solid-bg overlay subview at the overlay-space frame.
-        if box.superview !== self { box.removeFromSuperview(); addSubview(box) }
-        box.frame = frame
+        if LiquidGlass.isEnabled {
+            box.hostedInGlassPanel = true
+            resolutionChrome.present(box, overlayRect: frame, visible: true, glass: true, in: self)
+        } else {
+            if resolutionChrome.hasPanel { resolutionChrome.teardown() }
+            box.hostedInGlassPanel = false
+            if box.superview !== self { box.removeFromSuperview(); addSubview(box) }
+            box.frame = frame
+        }
     }
 
     private func refreshResolutionAndToolbarLayout() {
@@ -2918,20 +2946,27 @@ class OverlayView: NSView {
             preSelectionPresetButton = button
         }
 
-        if button.superview !== self {
-            button.removeFromSuperview()
-            addSubview(button)
-        }
-
         preSelectionPresetButtonRect = frame
-        button.frame = frame
         let label = preSelectionPresetDisplayLabel
         let title = L("Aspect ratio & resolution presets")
         button.update(active: label != nil, tooltip: label.map { "\(title): \($0)" } ?? title)
         button.isHidden = false
+
+        if LiquidGlass.isEnabled {
+            preSelectionPresetChrome.present(button, overlayRect: frame, visible: true, glass: true, in: self)
+        } else {
+            if preSelectionPresetChrome.hasPanel { preSelectionPresetChrome.teardown() }
+            button.hostedInGlassPanel = false
+            if button.superview !== self {
+                button.removeFromSuperview()
+                addSubview(button)
+            }
+            button.frame = frame
+        }
     }
 
     private func hidePreSelectionPresetButton() {
+        preSelectionPresetChrome.teardown()
         preSelectionPresetButton?.isHidden = true
         preSelectionPresetButtonRect = .zero
     }
@@ -4809,7 +4844,11 @@ class OverlayView: NSView {
                 height: btnSize)
             annotationEditButtonRect = editRect
             // Dark fill (same as delete)
-            NSColor(white: 0.12, alpha: 0.94).setFill()
+            if LiquidGlass.isEnabled {
+                NSColor(white: 0.1, alpha: 0.55).setFill()
+            } else {
+                NSColor(white: 0.12, alpha: 0.94).setFill()
+            }
             NSBezierPath(ovalIn: editRect).fill()
             // Accent border
             ToolbarLayout.accentColor.withAlphaComponent(0.9).setStroke()
@@ -5048,7 +5087,11 @@ class OverlayView: NSView {
     /// Draw a single-annotation delete circle — dark fill, red border, red xmark icon.
     private func drawDeleteCircle(in rect: NSRect) {
         // Dark fill
-        NSColor(white: 0.12, alpha: 0.94).setFill()
+        if LiquidGlass.isEnabled {
+            NSColor(white: 0.1, alpha: 0.55).setFill()
+        } else {
+            NSColor(white: 0.12, alpha: 0.94).setFill()
+        }
         NSBezierPath(ovalIn: rect).fill()
         // Red border
         let borderColor = NSColor(red: 0.9, green: 0.3, blue: 0.3, alpha: 0.9)
@@ -5108,7 +5151,11 @@ class OverlayView: NSView {
         multiSelectDeleteButtonRect = pillRect
 
         // Dark background pill
-        NSColor(white: 0.12, alpha: 0.94).setFill()
+        if LiquidGlass.isEnabled {
+            NSColor(white: 0.1, alpha: 0.55).setFill()
+        } else {
+            NSColor(white: 0.12, alpha: 0.94).setFill()
+        }
         NSBezierPath(roundedRect: pillRect, xRadius: pillH / 2, yRadius: pillH / 2).fill()
         NSColor.white.withAlphaComponent(0.08).setStroke()
         let borderPath = NSBezierPath(roundedRect: pillRect.insetBy(dx: 0.5, dy: 0.5),
@@ -5276,10 +5323,10 @@ class OverlayView: NSView {
         rightStrip.isHidden = !visible || !rightHasButtons
         toolOptionsRowView?.isHidden = !visible || !toolHasOptionsRow || !bottomHasButtons
         guard visible else {
-            // Toolbars hidden (deselected / scroll capture): dismiss the
-            // resolution box and clear the chrome rects so isPointOnChrome
-            // doesn't see stale areas.
-            dismissResolutionBox()
+            // Toolbars hidden (deselected / scroll capture): also dismiss the
+            // glass chrome panels so they don't linger as clickable windows, and
+            // clear the chrome rects so isPointOnChrome doesn't see stale areas.
+            teardownGlassChromePanels()
             optionsRowRect = .zero
             return
         }
@@ -5481,7 +5528,7 @@ class OverlayView: NSView {
         // strip's size + the origin we just set (rather than reading back the
         // live frame, which is panel-local when the strip is glass-panel-hosted).
         bottomBarRect = NSRect(origin: bottomStrip.frame.origin, size: bottomStrip.frame.size)
-        rightBarRect = rightStrip.frame
+        rightBarRect = NSRect(origin: rightStrip.frame.origin, size: rightStrip.frame.size)
 
         // Position options row — above bottom bar in editor, below in overlay
         if let row = toolOptionsRowView, !row.isHidden {
@@ -5502,21 +5549,57 @@ class OverlayView: NSView {
                 rowY = bottomBarRect.minY - row.frame.height - 2
                 row.frame.origin = NSPoint(x: rowX, y: rowY)
             }
+            // Capture the intended overlay-space rect before the row is lifted
+            // into a glass panel (where its live frame becomes panel-local).
             optionsRowRect = NSRect(origin: row.frame.origin, size: row.frame.size)
         } else {
             optionsRowRect = .zero
         }
+
+        syncGlassChromePanels()
     }
 
     /// Liquid Glass: lift each toolbar surface (bottom strip, right strip, tool
-    /// options row) into a floating child panel above the overlay window,
-    /// positioned at its screen rect, so its glass refracts the overlay
-    /// (screenshot + dim) beneath. `repositionToolbars` has just set the intended
-    /// OVERLAY-space frames; we use those (not the live panel-local frames).
+    /// options row) into a floating child panel above the overlay window (or an
+    /// inline glass host in editor mode), positioned at its intended rect.
+    private func syncGlassChromePanels() {
+        let glass = LiquidGlass.isEnabled
+        let inlineParent = isEditorMode ? chromeParentView : nil
+        if let s = bottomStripView {
+            bottomChrome.present(s, overlayRect: bottomBarRect,
+                                 visible: !s.isHidden, glass: glass, in: self,
+                                 inlineHostParent: inlineParent)
+        }
+        if let s = rightStripView {
+            rightChrome.present(s, overlayRect: rightBarRect,
+                                visible: !s.isHidden, glass: glass, in: self,
+                                inlineHostParent: inlineParent)
+        }
+        if let row = toolOptionsRowView {
+            optionsChrome.present(row, overlayRect: optionsRowRect,
+                                  visible: !row.isHidden, glass: glass, in: self,
+                                  inlineHostParent: inlineParent)
+        }
+        // Note: the resolution box's glass panel is owned by updateResolutionBox(),
+        // not synced here, so editing it is never disturbed by draw-driven
+        // repositionToolbars() calls.
+    }
+
+    /// Tear down all glass chrome hosts, returning their views to the overlay.
+    private func teardownGlassChromePanels() {
+        let targetParent = chromeParentView ?? self
+        bottomChrome.reclaim(bottomStripView, to: targetParent)
+        rightChrome.reclaim(rightStripView, to: targetParent)
+        optionsChrome.reclaim(toolOptionsRowView, to: targetParent)
+        preSelectionPresetChrome.reclaim(preSelectionPresetButton, to: self)
+        dismissResolutionBox()
+    }
+
     /// Dismiss the resolution box. It is recreated on demand by
     /// updateResolutionBox(), so it's fully disposed (not just hidden) on
     /// deselect to avoid leaving a stray box behind.
     private func dismissResolutionBox() {
+        resolutionChrome.teardown()
         resolutionBox?.removeFromSuperview()
         resolutionBox = nil
         resolutionBoxRect = .zero
@@ -7882,7 +7965,11 @@ class OverlayView: NSView {
             y: max(bounds.minY + 2, min(tipRect.minY, bounds.maxY - tipH - 2)),
             width: tipW, height: tipH)
 
-        ToolbarLayout.bgColor.setFill()
+        if LiquidGlass.isEnabled {
+            NSColor(white: 0.1, alpha: 0.70).setFill()
+        } else {
+            ToolbarLayout.bgColor.setFill()
+        }
         NSBezierPath(roundedRect: clamped, xRadius: 4, yRadius: 4).fill()
         str.draw(at: NSPoint(x: clamped.minX + pad, y: clamped.minY + pad / 2), withAttributes: attrs)
     }
@@ -7919,7 +8006,7 @@ class OverlayView: NSView {
         let tipRect: NSRect
 
         if isBottomBar {
-            let stripFrame = bottomStripView?.frame ?? .zero
+            let stripFrame = bottomStripView.map { $0.convert($0.bounds, to: parent) } ?? .zero
             var tipY = stripFrame.maxY + 4
             if tipY + tipH > parent.bounds.maxY - 2 { tipY = stripFrame.minY - tipH - 4 }
             tipRect = NSRect(x: btnFrame.midX - tipW / 2, y: tipY, width: tipW, height: tipH)
@@ -10307,7 +10394,7 @@ class OverlayView: NSView {
         currentTool = OverlayView.initialTool
         numberCounter = 0
         showToolbars = false
-        dismissResolutionBox()
+        teardownGlassChromePanels()
         bottomStripView?.isHidden = true
         rightStripView?.isHidden = true
         toolOptionsRowView?.isHidden = true
@@ -10458,7 +10545,11 @@ private class TooltipBackgroundView: NSView {
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
             .foregroundColor: ToolbarLayout.iconColor,
         ]
-        ToolbarLayout.bgColor.setFill()
+        if LiquidGlass.isEnabled {
+            NSColor(white: 0.1, alpha: 0.70).setFill()
+        } else {
+            ToolbarLayout.bgColor.setFill()
+        }
         NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
         let pad: CGFloat = 6
         (text as NSString).draw(at: NSPoint(x: pad, y: pad / 2), withAttributes: attrs)
@@ -10468,7 +10559,8 @@ private class TooltipBackgroundView: NSView {
 /// Compact icon-only control shown in the pre-selection helper. It opens the
 /// same ratio/resolution presets as the selected-area size control without
 /// turning the idle helper into a full toolbar.
-private final class PreSelectionPresetButton: NSButton {
+private final class PreSelectionPresetButton: NSButton, ChromeContent {
+    var hostedInGlassPanel = false { didSet { needsDisplay = true } }
     private var hovered = false
     private var activePreset = false
     private var trackingArea: NSTrackingArea?
@@ -10526,16 +10618,24 @@ private final class PreSelectionPresetButton: NSButton {
 
     override func draw(_ dirtyRect: NSRect) {
         let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
-        let bg: NSColor
-        if isHighlighted {
-            bg = ToolbarLayout.accentColor.withAlphaComponent(0.28)
-        } else if hovered {
-            bg = ToolbarLayout.iconColor.withAlphaComponent(0.14)
-        } else {
-            bg = NSColor.white.withAlphaComponent(0.07)
+        if !hostedInGlassPanel {
+            let bg: NSColor
+            if isHighlighted {
+                bg = ToolbarLayout.accentColor.withAlphaComponent(0.28)
+            } else if hovered {
+                bg = ToolbarLayout.iconColor.withAlphaComponent(0.14)
+            } else {
+                bg = NSColor.white.withAlphaComponent(0.07)
+            }
+            bg.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
+        } else if isHighlighted || hovered {
+            let tint: NSColor = isHighlighted
+                ? ToolbarLayout.accentColor.withAlphaComponent(0.3)
+                : ToolbarLayout.iconColor.withAlphaComponent(0.15)
+            tint.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
         }
-        bg.setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6).fill()
 
         let stroke = activePreset
             ? ToolbarLayout.accentColor.withAlphaComponent(0.85)

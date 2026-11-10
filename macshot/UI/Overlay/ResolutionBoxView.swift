@@ -5,7 +5,7 @@ import Cocoa
 /// Two real, separately-editable number fields with a non-editable "×" between
 /// them (so the separator can't be deleted), plus a presets dropdown button for
 /// aspect ratios and common resolutions. Replaces the old drawn "W × H" badge.
-final class ResolutionBoxView: NSView, NSTextFieldDelegate {
+final class ResolutionBoxView: NSView, NSTextFieldDelegate, ChromeContent {
 
     enum EditedDimension {
         case width
@@ -32,6 +32,12 @@ final class ResolutionBoxView: NSView, NSTextFieldDelegate {
     private let pad: CGFloat = 6
     private let btnW: CGFloat = 30
     private var suppressNextEndEditingCommit = false
+
+    /// When hosted in a Liquid Glass chrome panel, the panel's glass provides the
+    /// background, so the box clears its own solid layer fill (ChromeContent).
+    var hostedInGlassPanel = false {
+        didSet { layer?.backgroundColor = hostedInGlassPanel ? NSColor.clear.cgColor : ToolbarLayout.bgColor.cgColor }
+    }
 
     init() {
         super.init(frame: .zero)

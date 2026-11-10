@@ -39,10 +39,14 @@ class RecordingHUDPanel: NSPanel {
         containerView.wantsLayer = true
         containerView.layer?.cornerRadius = cornerRadius
         containerView.panel = self
-        containerView.layer?.backgroundColor = ToolbarLayout.bgColor.withAlphaComponent(0.94).cgColor
-        containerView.layer?.borderWidth = 0.5
-        containerView.layer?.borderColor = ToolbarLayout.iconColor.withAlphaComponent(0.1).cgColor
-        contentView = containerView
+        if let glass = LiquidGlass.host(containerView, frame: containerView.bounds, cornerRadius: cornerRadius) {
+            contentView = glass
+        } else {
+            containerView.layer?.backgroundColor = ToolbarLayout.bgColor.withAlphaComponent(0.94).cgColor
+            containerView.layer?.borderWidth = 0.5
+            containerView.layer?.borderColor = ToolbarLayout.iconColor.withAlphaComponent(0.1).cgColor
+            contentView = containerView
+        }
 
         setupStopButton()
         setupPauseButton()
