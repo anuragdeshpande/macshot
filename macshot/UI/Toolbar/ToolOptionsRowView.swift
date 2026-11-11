@@ -58,7 +58,10 @@ class ToolOptionsRowView: NSView, ChromeContent {
     /// When hosted in a Liquid Glass chrome panel or inline glass host, the glass
     /// provides the background, so the row clears its own solid layer fill (ChromeContent).
     var hostedInGlassPanel = false {
-        didSet { layer?.backgroundColor = hostedInGlassPanel ? NSColor.clear.cgColor : ToolbarLayout.bgColor.cgColor }
+        didSet {
+            layer?.backgroundColor = hostedInGlassPanel ? NSColor.clear.cgColor : ToolbarLayout.bgColor.cgColor
+            layer?.cornerRadius = hostedInGlassPanel ? 0 : 6
+        }
     }
 
     static func supportsOptions(for tool: AnnotationTool) -> Bool {

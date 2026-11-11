@@ -191,7 +191,7 @@ class OverlayView: NSView {
     private var isDraggingSelection: Bool = false
     private var isResizingSelection: Bool = false
     var isResizingCrossDisplaySelection: Bool {
-        isResizingSelection || isResizingRemoteSelection
+        isResizingSelection || isResizingRemoteSelection || isDraggingSelection || isKeyboardMoveSelectionActive
     }
     private var resizeHandle: ResizeHandle = .none
     private var dragOffset: NSPoint = .zero
@@ -2019,8 +2019,11 @@ class OverlayView: NSView {
                 }
                 context.restoreGraphicsState()
             }
-            // Purple border for remote selection
-            let remoteBorder = NSBezierPath(rect: remoteSelectionRect)
+            // Purple border for remote selection (use unclipped full rect so no artificial
+            // vertical/horizontal border line is drawn down the monitor boundary seam).
+            let remoteChromeRect = remoteSelectionFullRect.width >= 1 && remoteSelectionFullRect.height >= 1
+                ? remoteSelectionFullRect : remoteSelectionRect
+            let remoteBorder = NSBezierPath(rect: remoteChromeRect)
             remoteBorder.lineWidth = 2.0
             ToolbarLayout.accentColor.setStroke()
             remoteBorder.stroke()
@@ -3281,8 +3284,25 @@ class OverlayView: NSView {
         return applyPixelSize(w: w, h: h)
     }
 
+    /// Bounds available for selection sizing/clamping in view coordinates.
+    /// In editor mode this is `bounds`; in capture overlay mode this spans the
+    /// union of all connected screens converted into this overlay view's coordinate space.
+    var selectionBoundsInView: NSRect {
+        guard !isEditorMode, let currentScreen = window?.screen ?? NSScreen.main else {
+            return bounds
+        }
+        let screens = NSScreen.screens
+        guard screens.count > 1 else { return bounds }
+        let globalUnion = screens.reduce(currentScreen.frame) { $0.union($1.frame) }
+        return NSRect(
+            x: globalUnion.origin.x - currentScreen.frame.origin.x,
+            y: globalUnion.origin.y - currentScreen.frame.origin.y,
+            width: globalUnion.width,
+            height: globalUnion.height)
+    }
+
     /// Resize the selection to an exact pixel size (W×H in device pixels),
-    /// center-anchored and clamped to the screen. Used by the resolution box
+    /// center-anchored and clamped to the available display bounds. Used by the resolution box
     /// fields and resolution presets. Returns true if it fit exactly (no clamp).
     @discardableResult
     func applyPixelSize(w pxW: Int, h pxH: Int) -> Bool {
@@ -3291,9 +3311,10 @@ class OverlayView: NSView {
         var newW = CGFloat(pxW) / scale
         var newH = CGFloat(pxH) / scale
 
-        // Clamp to the overlay bounds, preserving aspect so presets don't distort.
-        let maxW = bounds.width
-        let maxH = bounds.height
+        // Clamp to the available overlay bounds, preserving aspect so presets don't distort.
+        let canvasBounds = selectionBoundsInView
+        let maxW = canvasBounds.width
+        let maxH = canvasBounds.height
         var fits = true
         if newW > maxW || newH > maxH {
             fits = false
@@ -3303,15 +3324,16 @@ class OverlayView: NSView {
         }
 
         // Center on the current selection (or screen center if no selection yet),
-        // then shift fully on-screen.
+        // then shift fully within the available display bounds.
         let cx = selectionRect.width > 0 ? selectionRect.midX : bounds.midX
         let cy = selectionRect.height > 0 ? selectionRect.midY : bounds.midY
         var rect = NSRect(x: cx - newW / 2, y: cy - newH / 2, width: newW, height: newH)
-        rect.origin.x = max(bounds.minX, min(rect.origin.x, bounds.maxX - newW))
-        rect.origin.y = max(bounds.minY, min(rect.origin.y, bounds.maxY - newH))
+        rect.origin.x = max(canvasBounds.minX, min(rect.origin.x, canvasBounds.maxX - newW))
+        rect.origin.y = max(canvasBounds.minY, min(rect.origin.y, canvasBounds.maxY - newH))
 
         selectionIsWindowSnap = false
         selectionRect = rect
+        overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
         refreshResolutionAndToolbarLayout()
         refreshCursorAfterSelectionChange()
         needsDisplay = true
@@ -3339,17 +3361,19 @@ class OverlayView: NSView {
             return
         }
         // Reshape to the locked ratio, keeping area roughly similar, centered.
+        let canvasBounds = selectionBoundsInView
         let cur = selectionRect
         var w = cur.width
         var h = w / aspect
-        if h > bounds.height || w > bounds.width {
-            let s = min(bounds.width / w, bounds.height / h)
+        if h > canvasBounds.height || w > canvasBounds.width {
+            let s = min(canvasBounds.width / w, canvasBounds.height / h)
             w *= s; h *= s
         }
         var rect = NSRect(x: cur.midX - w / 2, y: cur.midY - h / 2, width: w, height: h)
-        rect.origin.x = max(bounds.minX, min(rect.origin.x, bounds.maxX - w))
-        rect.origin.y = max(bounds.minY, min(rect.origin.y, bounds.maxY - h))
+        rect.origin.x = max(canvasBounds.minX, min(rect.origin.x, canvasBounds.maxX - w))
+        rect.origin.y = max(canvasBounds.minY, min(rect.origin.y, canvasBounds.maxY - h))
         selectionRect = rect
+        overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
         refreshResolutionAndToolbarLayout()
         refreshCursorAfterSelectionChange()
         needsDisplay = true
@@ -5766,8 +5790,14 @@ class OverlayView: NSView {
         ]
     }
 
+    private var remoteChromeRect: NSRect {
+        remoteSelectionFullRect.width >= 1 && remoteSelectionFullRect.height >= 1
+            ? remoteSelectionFullRect : remoteSelectionRect
+    }
+
     private func hitTestRemoteHandle(at point: NSPoint) -> ResizeHandle {
-        let r = remoteSelectionRect
+        guard remoteSelectionRect.width >= 1, remoteSelectionRect.height >= 1 else { return .none }
+        let r = remoteChromeRect
         guard r.width >= 1, r.height >= 1 else { return .none }
         let hitPad: CGFloat = 2
         for (handle, rect) in handleRectsForRect(r) {
@@ -5786,7 +5816,7 @@ class OverlayView: NSView {
     }
 
     private func drawRemoteResizeHandles() {
-        for (_, rect) in handleRectsForRect(remoteSelectionRect) {
+        for (_, rect) in handleRectsForRect(remoteChromeRect) {
             ToolbarLayout.handleColor.setFill()
             NSBezierPath(ovalIn: rect).fill()
         }
@@ -6668,7 +6698,9 @@ class OverlayView: NSView {
                 var moved = selectionRect
                 moved.origin = NSPoint(x: point.x - dragOffset.x, y: point.y - dragOffset.y)
                 selectionRect = boundarySnappedMovedRect(moved, modifiers: event.modifierFlags)
+                overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
                 updateResolutionBox()
+                repositionToolbars()
                 needsDisplay = true
             } else if isResizingSelection {
                 if spaceRepositioning {
@@ -7207,16 +7239,17 @@ class OverlayView: NSView {
         var w = CGFloat(max(1, pxW)) / scale
         var h = CGFloat(max(1, pxH)) / scale
 
-        if w > bounds.width || h > bounds.height {
-            let s = min(bounds.width / w, bounds.height / h)
+        let canvasBounds = selectionBoundsInView
+        if w > canvasBounds.width || h > canvasBounds.height {
+            let s = min(canvasBounds.width / w, canvasBounds.height / h)
             w *= s
             h *= s
         }
 
         var x = point.x - w / 2
         var y = point.y - h / 2
-        x = max(bounds.minX, min(x, bounds.maxX - w))
-        y = max(bounds.minY, min(y, bounds.maxY - h))
+        x = max(canvasBounds.minX, min(x, canvasBounds.maxX - w))
+        y = max(canvasBounds.minY, min(y, canvasBounds.maxY - h))
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
@@ -7792,9 +7825,10 @@ class OverlayView: NSView {
             let s = max(minSize / w, minSize / h)
             w *= s; h *= s
         }
-        // Shrink (ratio-preserved) if larger than the screen.
-        if w > bounds.width || h > bounds.height {
-            let s = min(bounds.width / w, bounds.height / h)
+        // Shrink (ratio-preserved) if larger than the available display bounds.
+        let canvasBounds = selectionBoundsInView
+        if w > canvasBounds.width || h > canvasBounds.height {
+            let s = min(canvasBounds.width / w, canvasBounds.height / h)
             w *= s; h *= s
         }
 
@@ -7813,9 +7847,9 @@ class OverlayView: NSView {
         case .right:        x = rect.minX;     y = rect.midY - h / 2
         default: break
         }
-        // Clamp POSITION into bounds (size already fits) without distorting ratio.
-        x = max(bounds.minX, min(x, bounds.maxX - w))
-        y = max(bounds.minY, min(y, bounds.maxY - h))
+        // Clamp POSITION into available display bounds (size already fits) without distorting ratio.
+        x = max(canvasBounds.minX, min(x, canvasBounds.maxX - w))
+        y = max(canvasBounds.minY, min(y, canvasBounds.maxY - h))
         return NSRect(x: x, y: y, width: w, height: h)
     }
 
@@ -7953,6 +7987,7 @@ class OverlayView: NSView {
             x: point.x - keyboardMoveSelectionOffset.x,
             y: point.y - keyboardMoveSelectionOffset.y)
         selectionRect = boundarySnappedMovedRect(moved, modifiers: modifiers)
+        overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
         if webcamSetupPreview != nil { repositionWebcamSetupPreview() }
         updateResolutionBox()
         repositionToolbars()
@@ -8524,6 +8559,7 @@ class OverlayView: NSView {
                 moved.origin = NSPoint(x: point.x - offset.x, y: point.y - offset.y)
                 // Snap the moved selection to nearby image edges (Option bypasses).
                 selectionRect = boundarySnappedMovedRect(moved, modifiers: event.modifierFlags)
+                overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
                 if hasWebcam { repositionWebcamSetupPreview() }
                 updateResolutionBox()  // track the box live during the move drag
                 repositionToolbars()
@@ -10377,11 +10413,14 @@ class OverlayView: NSView {
         needsDisplay = true
     }
 
-    func applySelection(_ rect: NSRect) {
+    func applySelection(_ rect: NSRect, notifyDelegate: Bool = true) {
         selectionRect = rect
         selectionStart = rect.origin
         state = .selected
         if !hasPendingSelectionAction { showToolbars = true }
+        if notifyDelegate {
+            overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
+        }
         runPendingSelectionActions()
         needsDisplay = true
     }

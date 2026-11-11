@@ -336,8 +336,8 @@ class OverlayWindowController {
         }
     }
 
-    func applySelection(_ rect: NSRect) {
-        overlayView?.applySelection(rect)
+    func applySelection(_ rect: NSRect, notifyDelegate: Bool = true) {
+        overlayView?.applySelection(rect, notifyDelegate: notifyDelegate)
     }
 
     func clearSelection() {

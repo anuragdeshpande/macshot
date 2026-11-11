@@ -250,7 +250,15 @@ class ScreenCaptureManager {
         // is looking at goes interactive after ONE capture, not after all of them.
         var order = Array(screens.enumerated())
         if let priority = priorityScreen,
-           let hit = order.firstIndex(where: { $0.element === priority }), hit != 0 {
+           let hit = order.firstIndex(where: {
+               if $0.element === priority { return true }
+               let key = NSDeviceDescriptionKey("NSScreenNumber")
+               if let a = $0.element.deviceDescription[key] as? CGDirectDisplayID,
+                  let b = priority.deviceDescription[key] as? CGDirectDisplayID {
+                   return a == b
+               }
+               return $0.element.frame == priority.frame
+           }), hit != 0 {
             let entry = order.remove(at: hit)
             order.insert(entry, at: 0)
             timing?("SCK rect: prioritised cursor display index=\(entry.offset)")

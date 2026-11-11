@@ -455,6 +455,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         if let existing = overlayControllerPool[ObjectIdentifier(screen)] {
             return existing
         }
+        if let (_, existing) = overlayControllerPool.first(where: { Self.sameScreen($0.value.screen, screen) }) {
+            return existing
+        }
         // New screen showed up between prewarms — create on demand.
         let controller = OverlayWindowController(screen: screen)
         overlayControllerPool[ObjectIdentifier(screen)] = controller
@@ -1415,6 +1418,16 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         pendingRestoreLastArea = false
     }
 
+    private static func sameScreen(_ lhs: NSScreen, _ rhs: NSScreen) -> Bool {
+        if lhs === rhs { return true }
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        if let lhsID = lhs.deviceDescription[key] as? CGDirectDisplayID,
+           let rhsID = rhs.deviceDescription[key] as? CGDirectDisplayID {
+            return lhsID == rhsID
+        }
+        return lhs.frame == rhs.frame
+    }
+
     private func performCapture(fromMenu: Bool) {
         captureTimingTrace?.mark("performCapture entered fromMenu=\(fromMenu)")
         let screens = measureCaptureTiming("NSScreen.screens") {
@@ -1497,7 +1510,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                     onCapture: { capture in
                         guard let self = self, self.isCapturing,
                               self.captureSessionID == sessionID else { return }
-                        guard let controller = controllers.first(where: { $0.screen === capture.screen })
+                        guard let controller = controllers.first(where: { Self.sameScreen($0.screen, capture.screen) })
                         else { return }
                         let isFirst = !progressive.shownAny
                         progressive.shownAny = true
@@ -1531,7 +1544,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
                       self.captureSessionID == sessionID else { return }
                 if progressive.shownAny {
                     self.installAndShowOverlays(
-                        captures: finalCaptures.filter { capture in remaining.contains { $0.screen == capture.screen } },
+                        captures: finalCaptures.filter { capture in remaining.contains { Self.sameScreen($0.screen, capture.screen) } },
                         controllers: remaining,
                         mouseScreen: mouseScreen,
                         applyFullScreen: didApplyFullScreen,
@@ -1587,10 +1600,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             return
         }
 
-        let capturesByScreen = Dictionary(uniqueKeysWithValues: captures.map { ($0.screen, $0.image) })
-
         for controller in controllers {
-            if let image = capturesByScreen[controller.screen] {
+            if let image = captures.first(where: { Self.sameScreen($0.screen, controller.screen) })?.image {
                 measureCaptureTiming("set screenshot") {
                     controller.setScreenshot(image)
                 }
@@ -3498,7 +3509,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         let primaryLocal = NSRect(x: globalRect.origin.x - primaryOrigin.x,
                                   y: globalRect.origin.y - primaryOrigin.y,
                                   width: globalRect.width, height: globalRect.height)
-        primary.applySelection(primaryLocal)
+        primary.applySelection(primaryLocal, notifyDelegate: false)
 
         // Update other secondary screens (not the caller — it manages its own remoteSelectionRect during drag)
         for other in overlayControllers where other !== controller && other !== primary {
@@ -3518,7 +3529,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         let primaryLocal = NSRect(x: globalRect.origin.x - primaryOrigin.x,
                                   y: globalRect.origin.y - primaryOrigin.y,
                                   width: globalRect.width, height: globalRect.height)
-        primary.applySelection(primaryLocal)
+        primary.applySelection(primaryLocal, notifyDelegate: false)
         primary.makeKey()
 
         // Re-sync ALL secondary screens (including the caller) from the primary's authoritative rect

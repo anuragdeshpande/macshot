@@ -8,6 +8,7 @@ final class ToolOptionsPopoverController: NSObject, NSPopoverDelegate {
     private var didFinish = false
 
     var contentSize: NSSize { popover.contentSize }
+    var optionsRowViewForTesting: ToolOptionsRowView { optionsView }
 
     init(overlayView: OverlayView, tool: AnnotationTool, title: String, annotation: Annotation? = nil) {
         let optionsView = ToolOptionsRowView()
@@ -16,12 +17,14 @@ final class ToolOptionsPopoverController: NSObject, NSPopoverDelegate {
 
         optionsView.overlayView = overlayView
         optionsView.orientation = .vertical
+        optionsView.hostedInGlassPanel = true
         if let annotation {
             optionsView.rebuild(forAnnotation: annotation)
         } else {
             optionsView.rebuild(for: tool)
         }
-        optionsView.layer?.cornerRadius = 8
+        optionsView.layer?.backgroundColor = NSColor.clear.cgColor
+        optionsView.layer?.cornerRadius = 0
 
         let rowHeight = optionsView.frame.height
         let visibleOptionsHeight = min(rowHeight, 360)

@@ -24,6 +24,18 @@ final class ToolOptionsPopoverControllerTests: XCTestCase {
         XCTAssertLessThanOrEqual(controller.contentSize.height, 410)
     }
 
+    func testToolOptionsPopoverUsesTransparentOptionsLayerBackground() {
+        let controller = ToolOptionsPopoverController(
+            overlayView: OverlayView(),
+            tool: .arrow,
+            title: "Arrow")
+        let row = controller.optionsRowViewForTesting
+
+        XCTAssertTrue(row.hostedInGlassPanel)
+        XCTAssertEqual(row.layer?.cornerRadius ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(row.layer?.backgroundColor?.alpha ?? 1, 0, accuracy: 0.001)
+    }
+
     func testCaptureOptionsRailUsesRoundedRectangleRatherThanCircularChrome() {
         let row = ToolOptionsRowView(frame: NSRect(x: 0, y: 0, width: 180, height: 220))
         row.orientation = .vertical
