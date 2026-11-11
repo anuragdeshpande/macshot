@@ -4,10 +4,19 @@ import Cocoa
 /// Dark rounded background matching the existing toolbar look, or hosted on Liquid Glass.
 class ToolbarStripView: NSView, ChromeContent {
 
-    enum Orientation { case horizontal, vertical }
+    enum Orientation: Equatable { case horizontal, vertical }
 
     let orientation: Orientation
     private(set) var buttonViews: [ToolbarButtonView] = []
+    var usesSegmentedChrome = false {
+        didSet {
+            needsDisplay = true
+            buttonViews.forEach { $0.needsDisplay = true }
+        }
+    }
+    var chromeCornerRadius: CGFloat {
+        usesSegmentedChrome ? min(bounds.width, bounds.height) / 2 : 6
+    }
     /// Set to true in editor mode so gap clicks pass through to the image beneath.
     var passesThrough = false
     /// Suppress hover visuals/callbacks while a toolbar-initiated drag is moving
@@ -139,7 +148,8 @@ class ToolbarStripView: NSView, ChromeContent {
         // When hosted in a glass container, the NSGlassEffectView renders the background.
         if hostedInGlassPanel { return }
         ToolbarLayout.bgColor.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 6, yRadius: 6).fill()
+        let radius = chromeCornerRadius
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
     }
 
     // Consume clicks on gaps between buttons so they don't fall through to OverlayView.

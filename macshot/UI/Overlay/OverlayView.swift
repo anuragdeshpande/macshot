@@ -418,6 +418,13 @@ class OverlayView: NSView {
     private var longPressTimer: Timer?
     private var longPressPoint: NSPoint = .zero
     private var longPressTriggered: Bool = false
+    private weak var annotationPopoverCandidate: Annotation?
+    private var annotationPopoverTimer: Timer?
+    private var annotationHoverPopoverController: ToolOptionsPopoverController?
+    private var toolOptionsPopoverController: ToolOptionsPopoverController?
+    private var toolOptionsPopoverTool: AnnotationTool?
+    private var annotationHoverTrackingArea: NSTrackingArea?
+    private let outsideSelectionBlur = OutsideSelectionBlur()
     /// Annotation under the cursor when using a non-select drawing tool — enables on-the-fly move without switching tools.
     private var hoveredAnnotation: Annotation?
     /// Delays clearing hoveredAnnotation so the cursor can travel to handles/buttons that sit outside the hit area.
@@ -448,6 +455,7 @@ class OverlayView: NSView {
             if showToolbars && !oldValue {
                 rebuildToolbarLayout()
             } else if !showToolbars && oldValue {
+                dismissAnnotationHoverPopover()
                 bottomStripView?.isHidden = true
                 rightStripView?.isHidden = true
                 toolOptionsRowView?.isHidden = true
@@ -1244,6 +1252,8 @@ class OverlayView: NSView {
             return
         }
 
+        updateAnnotationHoverPopover(at: point)
+
         // Stamp cursor preview — track in view coords (same as annotations)
         if currentTool == .stamp && currentStampImage != nil && state == .selected && !isRecording
             && !showBeautifyInOptionsRow
@@ -1361,6 +1371,144 @@ class OverlayView: NSView {
         }
 
         // Toolbar hover handled by ToolbarButtonView (real NSView subviews)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let annotationHoverTrackingArea {
+            removeTrackingArea(annotationHoverTrackingArea)
+        }
+        let trackingArea = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .mouseMoved, .activeAlways],
+            owner: self,
+            userInfo: nil)
+        addTrackingArea(trackingArea)
+        annotationHoverTrackingArea = trackingArea
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if annotationHoverPopoverController?.containsScreenPoint(NSEvent.mouseLocation) == true { return }
+        dismissAnnotationHoverPopover()
+    }
+
+    private func updateAnnotationHoverPopover(at point: NSPoint) {
+        guard toolOptionsPopoverController == nil else {
+            dismissAnnotationHoverPopover()
+            return
+        }
+        guard !isEditorMode, showToolbars, state == .selected,
+              !isRecording, !isScrollCapturing, !isDraggingAnnotation,
+              !isPointOnChrome(point)
+        else {
+            dismissAnnotationHoverPopover()
+            return
+        }
+
+        let canvasPoint = viewToCanvas(point)
+        let annotation = annotations.reversed().first { $0.hitTest(point: canvasPoint) }
+        guard let annotation, !isSelected(annotation) else {
+            dismissAnnotationHoverPopover()
+            return
+        }
+        guard ToolOptionsRowView.supportsOptions(for: annotation.tool) else {
+            dismissAnnotationHoverPopover()
+            return
+        }
+        guard annotationPopoverCandidate !== annotation else { return }
+
+        dismissAnnotationHoverPopover()
+        annotationPopoverCandidate = annotation
+        annotationPopoverTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self, weak annotation] _ in
+            guard let self, let annotation,
+                  self.annotationPopoverCandidate === annotation,
+                  !self.isDraggingAnnotation,
+                  !PopoverHelper.isVisible
+            else { return }
+            self.showAnnotationHoverPopover(for: annotation)
+        }
+    }
+
+    private func showAnnotationHoverPopover(for annotation: Annotation) {
+        let canvasBounds = annotation.boundingRect
+        let first = canvasToView(NSPoint(x: canvasBounds.minX, y: canvasBounds.minY))
+        let second = canvasToView(NSPoint(x: canvasBounds.maxX, y: canvasBounds.maxY))
+        let anchorRect = NSRect(
+            x: min(first.x, second.x),
+            y: min(first.y, second.y),
+            width: max(1, abs(second.x - first.x)),
+            height: max(1, abs(second.y - first.y)))
+        let controller = ToolOptionsPopoverController(
+            overlayView: self,
+            tool: annotation.tool,
+            title: toolbarTitle(for: annotation.tool),
+            annotation: annotation)
+        controller.onClose = { [weak self, weak controller] in
+            guard let self, self.annotationHoverPopoverController === controller else { return }
+            self.annotationHoverPopoverController = nil
+        }
+        annotationHoverPopoverController = controller
+        controller.show(relativeTo: anchorRect, of: self)
+    }
+
+    private func showToolOptionsPopover(for tool: AnnotationTool, anchoredTo button: ToolbarButtonView) {
+        dismissAnnotationHoverPopover()
+        dismissToolOptionsPopover()
+
+        let controller = ToolOptionsPopoverController(
+            overlayView: self, tool: tool, title: button.tooltipText)
+        controller.onClose = { [weak self, weak controller] in
+            guard let self, self.toolOptionsPopoverController === controller else { return }
+            self.toolOptionsPopoverController = nil
+            self.toolOptionsPopoverTool = nil
+        }
+        toolOptionsPopoverController = controller
+        toolOptionsPopoverTool = tool
+        controller.show(relativeTo: button.bounds, of: button, preferredEdge: .maxX)
+    }
+
+    private func toolbarTitle(for tool: AnnotationTool) -> String {
+        bottomButtons.first {
+            if case .tool(let candidate) = $0.action { return candidate == tool }
+            return false
+        }?.tooltip ?? ""
+    }
+
+    private func dismissToolOptionsPopover() {
+        let controller = toolOptionsPopoverController
+        toolOptionsPopoverController = nil
+        toolOptionsPopoverTool = nil
+        controller?.dismiss()
+    }
+
+    private func dismissAnnotationHoverPopover() {
+        annotationPopoverTimer?.invalidate()
+        annotationPopoverTimer = nil
+        annotationPopoverCandidate = nil
+        annotationHoverPopoverController?.dismiss()
+        annotationHoverPopoverController = nil
+    }
+
+    private func handleCaptureToolbarClick(_ action: ToolbarButtonAction) {
+        guard !isEditorMode, case .tool(let tool) = action else {
+            handleToolbarAction(action)
+            return
+        }
+
+        if currentTool == tool, ToolOptionsRowView.supportsOptions(for: tool) {
+            if toolOptionsPopoverTool == tool {
+                dismissToolOptionsPopover()
+            } else if let button = bottomStripView?.buttonViews.first(where: {
+                if case .tool(let buttonTool) = $0.action { return buttonTool == tool }
+                return false
+            }) {
+                showToolOptionsPopover(for: tool, anchoredTo: button)
+            }
+            return
+        }
+
+        dismissToolOptionsPopover()
+        handleToolbarAction(action)
     }
 
     // Custom cursors
@@ -1805,8 +1953,27 @@ class OverlayView: NSView {
                     image.draw(in: bounds, from: .zero, operation: .copy, fraction: 1.0)
                 }
                 if !selectionOutsideShadowDisabled {
-                    NSColor.black.withAlphaComponent(0.45).setFill()
-                    NSBezierPath(rect: bounds).fill()
+                    let activeSelection = state == .idle ? remoteSelectionRect : selectionRect
+                    if activeSelection.width > 0, activeSelection.height > 0 {
+                        let outsideSelection = NSBezierPath(rect: bounds)
+                        outsideSelection.append(NSBezierPath(rect: activeSelection))
+                        outsideSelection.windingRule = .evenOdd
+
+                        NSGraphicsContext.saveGraphicsState()
+                        outsideSelection.addClip()
+                        if !usesExternalScreenshotPreview,
+                           let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                           let blurred = outsideSelectionBlur.image(for: source) {
+                            NSImage(cgImage: blurred, size: image.size)
+                                .draw(in: bounds, from: .zero, operation: .copy, fraction: 1)
+                        }
+                        NSColor.black.withAlphaComponent(0.36).setFill()
+                        NSBezierPath(rect: bounds).fill()
+                        NSGraphicsContext.restoreGraphicsState()
+                    } else {
+                        NSColor.black.withAlphaComponent(0.45).setFill()
+                        NSBezierPath(rect: bounds).fill()
+                    }
                 }
             } else {
                 // No screenshot yet — fully transparent. User sees live desktop
@@ -3515,15 +3682,7 @@ class OverlayView: NSView {
         if selectedAnnotation != nil && toolOptionsRowView?.editingAnnotation != nil {
             return true
         }
-        switch currentTool {
-        case .pencil, .line, .arrow, .rectangle, .ellipse, .marker, .number, .loupe, .measure,
-            .pixelate, .stamp, .highlight:
-            return true
-        case .text:
-            return true
-        default:
-            return showBeautifyInOptionsRow
-        }
+        return ToolOptionsRowView.supportsOptions(for: currentTool) || showBeautifyInOptionsRow
     }
 
     private func startBeautifyToolbarAnimation() {
@@ -5222,31 +5381,53 @@ class OverlayView: NSView {
         hoveredTooltipButtonView = nil
 
         let movableAnnotations = annotations.contains { $0.isMovable }
-        bottomButtons = ToolbarLayout.bottomButtons(
+        var allBottomButtons = ToolbarLayout.bottomButtons(
             selectedTool: currentTool, selectedColor: currentColor,
             beautifyEnabled: beautifyEnabled, beautifyStyleIndex: beautifyStyleIndex,
             hasAnnotations: movableAnnotations, isRecording: isRecording,
             effectsActive: effectsActive
         )
         if showBeautifyInOptionsRow {
-            for i in bottomButtons.indices {
-                if case .tool = bottomButtons[i].action {
-                    bottomButtons[i].isSelected = false
-                } else if case .beautify = bottomButtons[i].action {
-                    bottomButtons[i].isSelected = true
+            for i in allBottomButtons.indices {
+                if case .tool = allBottomButtons[i].action {
+                    allBottomButtons[i].isSelected = false
+                } else if case .beautify = allBottomButtons[i].action {
+                    allBottomButtons[i].isSelected = true
                 }
             }
         }
-        rightButtons = ToolbarLayout.rightButtons(
+        let standardRightButtons = ToolbarLayout.rightButtons(
             beautifyEnabled: beautifyEnabled, beautifyStyleIndex: beautifyStyleIndex,
             hasAnnotations: movableAnnotations, translateEnabled: translateEnabled,
             isRecording: isRecording,
             isEditorMode: isEditorMode)
+        if isEditorMode {
+            bottomButtons = allBottomButtons
+            rightButtons = standardRightButtons
+        } else {
+            bottomButtons = allBottomButtons.filter {
+                if case .tool = $0.action { return true }
+                if case .color = $0.action { return true }
+                return false
+            }
+            let movedActions = allBottomButtons.filter {
+                if case .tool = $0.action { return false }
+                if case .color = $0.action { return false }
+                return true
+            }
+            rightButtons = standardRightButtons + movedActions
+        }
 
         // Create strip views if needed — add to chrome parent (window content) when in scroll view
         let parent = chromeParentView ?? self
+        let bottomOrientation: ToolbarStripView.Orientation = isEditorMode ? .horizontal : .vertical
+        if let strip = bottomStripView, strip.orientation != bottomOrientation {
+            bottomChrome.reclaim(strip, to: parent)
+            strip.removeFromSuperview()
+            bottomStripView = nil
+        }
         if bottomStripView == nil {
-            let strip = ToolbarStripView(orientation: .horizontal)
+            let strip = ToolbarStripView(orientation: bottomOrientation)
             parent.addSubview(strip)
             bottomStripView = strip
         }
@@ -5255,13 +5436,15 @@ class OverlayView: NSView {
             parent.addSubview(strip)
             rightStripView = strip
         }
+        bottomStripView?.usesSegmentedChrome = !isEditorMode
+        rightStripView?.usesSegmentedChrome = !isEditorMode
 
         // Update existing buttons if count matches, rebuild only if structure changed
         if bottomStripView?.buttonViews.count == bottomButtons.count && bottomStripView?.buttonViews.count ?? 0 > 0 {
             bottomStripView?.updateState(from: bottomButtons)
         } else {
             bottomStripView?.setButtons(bottomButtons)
-            bottomStripView?.onClick = { [weak self] action in self?.handleToolbarAction(action) }
+            bottomStripView?.onClick = { [weak self] action in self?.handleCaptureToolbarClick(action) }
             bottomStripView?.onRightClick = { [weak self] action, view in
                 self?.handleToolbarButtonRightClick(action, anchorView: view)
             }
@@ -5296,6 +5479,7 @@ class OverlayView: NSView {
                 parent.addSubview(row)
                 toolOptionsRowView = row
             }
+            toolOptionsRowView?.orientation = isEditorMode ? .horizontal : .vertical
             // Don't overwrite annotation-specific options when editing a selected annotation
             if let ann = selectedAnnotation, toolOptionsRowView?.editingAnnotation === ann {
                 // Already showing this annotation's options — skip rebuild
@@ -5328,6 +5512,8 @@ class OverlayView: NSView {
             // clear the chrome rects so isPointOnChrome doesn't see stale areas.
             teardownGlassChromePanels()
             optionsRowRect = .zero
+            dismissAnnotationHoverPopover()
+            dismissToolOptionsPopover()
             return
         }
 
@@ -5361,6 +5547,7 @@ class OverlayView: NSView {
 
         let bottomSize = bottomStrip.frame.size
 
+        var captureRailFrames: ToolbarRailFrames?
         if isEditorMode {
             let cb = chromeParentView?.bounds ?? bounds
             bottomStrip.frame.origin = NSPoint(x: cb.midX - bottomSize.width / 2, y: 20)
@@ -5369,159 +5556,51 @@ class OverlayView: NSView {
                 x: cb.maxX - rightSize.width - 20, y: cb.maxY - rightSize.height - 36)
             rightStrip.autoresizingMask = [.minXMargin, .minYMargin]
         } else {
-            let optRowH: CGFloat = 38  // options row height + gap
+            let optionsSize = toolOptionsRowView?.isHidden == false
+                ? toolOptionsRowView?.frame.size ?? .zero
+                : .zero
+            var rails = ToolbarRailFrames.place(
+                around: anchorRect,
+                inside: bounds,
+                annotationSize: bottomSize,
+                optionsSize: optionsSize,
+                actionSize: rightSize)
+            var actionFrame = rails.actions
 
-            // ── 1. Position right bar (anchored to selection edge) ──
-            let rightMargin: CGFloat = 50
-            let rightFitsRight = anchorRect.maxX < bounds.maxX - rightMargin
-            let rightFitsLeft = anchorRect.minX > bounds.minX + rightMargin
-
-            // For very narrow selections, put the right bar below instead of to the side
-            let selectionTooNarrow = !rightFitsRight && !rightFitsLeft
-                && anchorRect.width < bounds.width * 0.5
-
-            var rx: CGFloat
-            var ry: CGFloat
-
-            if selectionTooNarrow {
-                // Place right bar below the selection, right-aligned
-                rx = anchorRect.maxX - rightSize.width
-                rx = max(bounds.minX + 4, min(rx, bounds.maxX - rightSize.width - 4))
-                ry = anchorRect.minY - rightSize.height - 6
-                ry = max(bounds.minY + 4, min(ry, bounds.maxY - rightSize.height - 4))
-            } else {
-                if rightFitsRight {
-                    rx = anchorRect.maxX + 6
-                } else if rightFitsLeft {
-                    rx = anchorRect.minX - rightSize.width - 6
-                } else {
-                    rx = selectionRect.maxX - rightSize.width - 6
-                }
-                rx = max(bounds.minX + 4, min(rx, bounds.maxX - rightSize.width - 4))
-
-                ry = anchorRect.maxY - rightSize.height
-                ry = max(bounds.minY + 4, min(ry, bounds.maxY - rightSize.height - 4))
-            }
-
-            // ── 2. Choose bottom bar Y, preferring positions that don't overlap right bar ──
-            let belowY = anchorRect.minY - bottomSize.height - 6
-            let belowFits = (belowY - optRowH) >= bounds.minY + 4
-            let aboveY = anchorRect.maxY + optRowH + 6
-            let aboveFits = (aboveY + bottomSize.height) <= bounds.maxY - 4
-
-            // Helper: does a bottom bar at candidate Y (centered) overlap the right bar?
-            let centeredBx = anchorRect.midX - bottomSize.width / 2
-            let clampedCenteredBx = max(bounds.minX + 4, min(centeredBx, bounds.maxX - bottomSize.width - 4))
-            func wouldOverlapRight(candidateY: CGFloat) -> Bool {
-                let bMinY = candidateY - optRowH
-                let bMaxY = candidateY + bottomSize.height
-                guard bMaxY > ry && bMinY < ry + rightSize.height else { return false }
-                let bMaxX = clampedCenteredBx + bottomSize.width
-                let bMinX = clampedCenteredBx
-                return bMaxX > rx && bMinX < rx + rightSize.width
-            }
-
-            var by: CGFloat
-            if belowFits && !wouldOverlapRight(candidateY: belowY) {
-                by = belowY
-            } else if aboveFits && !wouldOverlapRight(candidateY: aboveY) {
-                by = aboveY
-            } else if belowFits {
-                by = belowY  // overlaps but at least fits vertically
-            } else if aboveFits {
-                by = aboveY
-            } else {
-                by = selectionRect.minY + optRowH + 6
-                by = max(bounds.minY + optRowH + 4, min(by, bounds.maxY - bottomSize.height - 4))
-            }
-
-            // ── 3. Position bottom bar X, avoiding right bar if they overlap vertically ──
-            var bx = clampedCenteredBx
-            let bottomMinY = by - optRowH
-            let bottomMaxY = by + bottomSize.height
-            let overlapsVertically = bottomMaxY > ry && bottomMinY < ry + rightSize.height
-
-            if overlapsVertically {
-                // Check if centered bottom bar already clears the right bar horizontally
-                if bx + bottomSize.width <= rx - 4 || bx >= rx + rightSize.width + 4 {
-                    // No overlap — keep both as-is
-                } else {
-                    // Overlap: move the RIGHT bar out of the way, keep bottom bar centered.
-                    // Try pushing right bar further right (past bottom bar's right edge).
-                    let pushRight = bx + bottomSize.width + 4
-                    // Try pushing right bar to the left (before bottom bar's left edge).
-                    let pushLeft = bx - rightSize.width - 4
-
-                    if pushRight + rightSize.width <= bounds.maxX - 4 {
-                        rx = pushRight
-                    } else if pushLeft >= bounds.minX + 4 {
-                        rx = pushLeft
-                    } else {
-                        // Right bar can't dodge horizontally — push it vertically.
-                        // Try below the bottom bar + options row zone.
-                        let rightPushDown = by - optRowH - rightSize.height - 4
-                        if rightPushDown >= bounds.minY + 4 {
-                            ry = rightPushDown
-                        } else {
-                            // Try above the bottom bar
-                            let rightPushUp = by + bottomSize.height + 4
-                            if rightPushUp + rightSize.height <= bounds.maxY - 4 {
-                                ry = rightPushUp
-                            }
-                            // else: truly no room, accept overlap
-                        }
-                    }
-                }
-            }
-
-            // The resolution box is positioned independently from the toolbar
-            // strips. During live selection/annotation resizing it can already
-            // be visible when this method runs, so make the side toolbar treat
-            // it as an obstacle too. Prefer moving the side toolbar farther to
-            // the right; that preserves the user's mental model of "actions sit
-            // beside the selection" when there is still room on that side.
             if shouldShowResolutionBox(), resolutionBoxRect.width > 1, resolutionBoxRect.height > 1 {
-                let gap: CGFloat = 6
-                let avoidRect = resolutionBoxRect.insetBy(dx: -gap, dy: -gap)
-                let candidate = NSRect(x: rx, y: ry, width: rightSize.width, height: rightSize.height)
-                if candidate.intersects(avoidRect) {
-                    let pushRight = avoidRect.maxX + gap
-                    let pushLeft = avoidRect.minX - rightSize.width - gap
-                    let pushUp = avoidRect.maxY + gap
-                    let pushDown = avoidRect.minY - rightSize.height - gap
-
-                    if pushRight + rightSize.width <= bounds.maxX - 4 {
-                        rx = pushRight
-                    } else if pushLeft >= bounds.minX + 4 {
-                        rx = pushLeft
-                    } else if pushUp + rightSize.height <= bounds.maxY - 4 {
-                        ry = pushUp
-                    } else if pushDown >= bounds.minY + 4 {
-                        ry = pushDown
+                let avoidRect = resolutionBoxRect.insetBy(dx: -6, dy: -6)
+                if actionFrame.intersects(avoidRect) {
+                    let candidates = [
+                        NSRect(x: avoidRect.maxX + 6, y: actionFrame.minY, width: actionFrame.width, height: actionFrame.height),
+                        NSRect(x: avoidRect.minX - actionFrame.width - 6, y: actionFrame.minY, width: actionFrame.width, height: actionFrame.height),
+                        NSRect(x: actionFrame.minX, y: avoidRect.maxY + 6, width: actionFrame.width, height: actionFrame.height),
+                        NSRect(x: actionFrame.minX, y: avoidRect.minY - actionFrame.height - 6, width: actionFrame.width, height: actionFrame.height),
+                    ]
+                    if let clearFrame = candidates.first(where: {
+                        bounds.insetBy(dx: 4, dy: 4).contains($0) && !$0.intersects(avoidRect)
+                    }) {
+                        actionFrame = clearFrame
                     }
                 }
             }
 
-            bx = max(bounds.minX + 4, min(bx, bounds.maxX - bottomSize.width - 4))
-            rx = max(bounds.minX + 4, min(rx, bounds.maxX - rightSize.width - 4))
-            ry = max(bounds.minY + 4, min(ry, bounds.maxY - rightSize.height - 4))
-
-            // Keep the right bar clear of the notch / camera housing. The
-            // resolution box already does this (loweredBelowTopObstructions); the
-            // right strip had no such limit, so its top button could land under
-            // the notch. Push it down so its top edge sits below any top
-            // obstruction it would overlap (using the final rx so the horizontal
-            // overlap test matches the placed strip).
             let topObstructions = screenTopObstructionRects().map { $0.insetBy(dx: -4, dy: -2) }
             for obstruction in topObstructions {
-                let rightFrame = NSRect(x: rx, y: ry, width: rightSize.width, height: rightSize.height)
-                guard rightFrame.intersects(obstruction) else { continue }
-                ry = min(ry, obstruction.minY - rightSize.height - 2)
+                if actionFrame.intersects(obstruction) {
+                    actionFrame.origin.y = obstruction.minY - actionFrame.height - 2
+                }
             }
-            ry = max(bounds.minY + 4, ry)
+            actionFrame.origin.y = max(
+                bounds.minY + 4,
+                min(actionFrame.minY, bounds.maxY - actionFrame.height - 4))
 
-            bottomStrip.frame.origin = NSPoint(x: bx, y: by)
-            rightStrip.frame.origin = NSPoint(x: rx, y: ry)
+            rails = ToolbarRailFrames(
+                annotations: rails.annotations,
+                options: rails.options,
+                actions: actionFrame)
+            captureRailFrames = rails
+            bottomStrip.frame.origin = rails.annotations.origin
+            rightStrip.frame.origin = rails.actions.origin
         }
 
         // bottomBarRect is the intended OVERLAY-space rect. Build it from the
@@ -5530,24 +5609,18 @@ class OverlayView: NSView {
         bottomBarRect = NSRect(origin: bottomStrip.frame.origin, size: bottomStrip.frame.size)
         rightBarRect = NSRect(origin: rightStrip.frame.origin, size: rightStrip.frame.size)
 
-        // Position options row — above bottom bar in editor, below in overlay
+        // Keep editor options below the horizontal bar and capture options outside the left rail.
         if let row = toolOptionsRowView, !row.isHidden {
-            // Use the wider of the bottom bar and the row's natural content width
-            let rowW = max(bottomBarRect.width, row.contentWidth)
-            row.frame.size.width = rowW
-            let rowY: CGFloat
             if isEditorMode {
+                let rowW = max(bottomBarRect.width, row.contentWidth)
+                row.frame.size.width = rowW
                 // In editor mode, center the options row the same way as the bottom bar
                 let cb = chromeParentView?.bounds ?? bounds
                 let rowX = max(4, cb.midX - rowW / 2)
                 row.frame.origin = NSPoint(x: rowX, y: bottomBarRect.maxY + 2)
                 row.autoresizingMask = [.minXMargin, .maxXMargin, .maxYMargin]
             } else {
-                // Center the options row relative to the bottom bar, clamped to view bounds
-                var rowX = bottomBarRect.midX - rowW / 2
-                rowX = max(4, min(rowX, bounds.maxX - rowW - 4))
-                rowY = bottomBarRect.minY - row.frame.height - 2
-                row.frame.origin = NSPoint(x: rowX, y: rowY)
+                row.frame = captureRailFrames?.options ?? .zero
             }
             // Capture the intended overlay-space rect before the row is lifted
             // into a glass panel (where its live frame becomes panel-local).
@@ -5568,17 +5641,20 @@ class OverlayView: NSView {
         if let s = bottomStripView {
             bottomChrome.present(s, overlayRect: bottomBarRect,
                                  visible: !s.isHidden, glass: glass, in: self,
-                                 inlineHostParent: inlineParent)
+                                 inlineHostParent: inlineParent,
+                                 cornerRadius: s.usesSegmentedChrome ? s.chromeCornerRadius : nil)
         }
         if let s = rightStripView {
             rightChrome.present(s, overlayRect: rightBarRect,
                                 visible: !s.isHidden, glass: glass, in: self,
-                                inlineHostParent: inlineParent)
+                                inlineHostParent: inlineParent,
+                                cornerRadius: s.usesSegmentedChrome ? s.chromeCornerRadius : nil)
         }
         if let row = toolOptionsRowView {
             optionsChrome.present(row, overlayRect: optionsRowRect,
                                   visible: !row.isHidden, glass: glass, in: self,
-                                  inlineHostParent: inlineParent)
+                                  inlineHostParent: inlineParent,
+                                  cornerRadius: row.orientation == .vertical ? row.chromeCornerRadius : nil)
         }
         // Note: the resolution box's glass panel is owned by updateResolutionBox(),
         // not synced here, so editing it is never disturbed by draw-driven
@@ -5727,6 +5803,7 @@ class OverlayView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         if isRecognizingText { return }
+        dismissAnnotationHoverPopover()
         // A second click whose mouse-up never arrived (window ordered out
         // mid-press) must not turn the next press into a copy.
         pendingDoubleClickCopy = nil
@@ -7949,7 +8026,13 @@ class OverlayView: NSView {
         let isBottomBar = isButton(btn, inStrip: bottomStripView)
         let tipRect: NSRect
 
-        if isBottomBar {
+        if isBottomBar, bottomStripView?.orientation == .vertical {
+            tipRect = NSRect(
+                x: btnFrame.maxX + 6,
+                y: btnFrame.midY - tipH / 2,
+                width: tipW,
+                height: tipH)
+        } else if isBottomBar {
             // Above bottom bar, or below if no room
             var tipY = bottomBarRect.maxY + 4
             if tipY + tipH > bounds.maxY - 2 { tipY = bottomBarRect.minY - tipH - 4 }
@@ -8365,6 +8448,9 @@ class OverlayView: NSView {
     func handleToolbarAction(_ action: ToolbarButtonAction, mousePoint: NSPoint = .zero) {
         switch action {
         case .tool(let tool):
+            if toolOptionsPopoverTool != tool {
+                dismissToolOptionsPopover()
+            }
             commitTextFieldIfNeeded()
             showBeautifyInOptionsRow = false  // switch back to tool options
             currentTool = tool

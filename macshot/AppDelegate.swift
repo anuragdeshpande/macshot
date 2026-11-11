@@ -196,6 +196,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
     private var statusItem: NSStatusItem!
     private var updaterController: SPUStandardUpdaterController!
     private var overlayControllers: [OverlayWindowController] = []
+    private var crossDisplaySelectionController: OverlayWindowController?
+    private var crossDisplaySelectionEventMonitor: Any?
     private var settingsController: SettingsWindowController?
     private var onboardingController: PermissionOnboardingController?
     private var pinControllers: [PinWindowController] = []
@@ -1719,6 +1721,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
 
     private func dismissOverlays(refocusPreviousApp: Bool = true) {
         captureTimingTrace?.mark("dismissOverlays entered refocus=\(refocusPreviousApp)")
+        stopCrossDisplaySelectionMonitoring()
         autoreleasepool {
             for controller in overlayControllers {
                 controller.dismiss()
@@ -2541,6 +2544,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
     }
 
     func overlayDidCancel(_ controller: OverlayWindowController) {
+        stopCrossDisplaySelectionMonitoring()
         // If the user cancels while in recording setup (before capture started),
         // just dismiss. If recording is actively capturing, stop it.
         if controller === recordingOverlayController, let engine = recordingEngine {
@@ -3449,6 +3453,17 @@ extension AppDelegate: OverlayWindowControllerDelegate {
 
     func overlayDidBeginSelection(_ controller: OverlayWindowController) {
         captureTimingTrace?.mark("user began selection")
+        crossDisplaySelectionController = controller
+        if crossDisplaySelectionEventMonitor == nil {
+            crossDisplaySelectionEventMonitor = NSEvent.addLocalMonitorForEvents(
+                matching: [.leftMouseDragged, .leftMouseUp]
+            ) { [weak self] event in
+                guard let self,
+                      self.crossDisplaySelectionController?.forwardCrossDisplaySelectionEvent(event) == true
+                else { return event }
+                return nil
+            }
+        }
         // The user committed to one screen. Also drop the auto-translate flag on
         // the other overlays: this mode leaves overlays open, so a still-set flag
         // there would auto-translate again if the user later drew on that screen.
@@ -3459,6 +3474,19 @@ extension AppDelegate: OverlayWindowControllerDelegate {
             other.setRemoteSelection(.zero)
             other.clearAutoTranslateOverlayMode()
         }
+    }
+
+    func overlayDidFinishSelection(_ controller: OverlayWindowController) {
+        guard crossDisplaySelectionController === controller else { return }
+        stopCrossDisplaySelectionMonitoring()
+    }
+
+    private func stopCrossDisplaySelectionMonitoring() {
+        if let monitor = crossDisplaySelectionEventMonitor {
+            NSEvent.removeMonitor(monitor)
+            crossDisplaySelectionEventMonitor = nil
+        }
+        crossDisplaySelectionController = nil
     }
 
     func overlayDidChangeSelection(_ controller: OverlayWindowController, globalRect: NSRect) {

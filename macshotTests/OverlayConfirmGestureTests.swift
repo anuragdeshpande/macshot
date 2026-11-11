@@ -110,7 +110,7 @@ final class OverlayConfirmGestureTests: XCTestCase {
             view.mouseUp(with: mouse(.leftMouseUp, at: point))
             view.mouseDown(with: mouse(.leftMouseDown, at: point, clickCount: 2))   // mouse-up lost
 
-            let start = NSPoint(x: 250, y: 60), end = NSPoint(x: 330, y: 200)
+            let start = NSPoint(x: 300, y: 100), end = NSPoint(x: 330, y: 200)
             view.mouseDown(with: mouse(.leftMouseDown, at: start))
             view.mouseDragged(with: mouse(.leftMouseDragged, at: end))
             view.mouseUp(with: mouse(.leftMouseUp, at: end))

@@ -84,10 +84,12 @@ protocol OverlayWindowControllerDelegate: AnyObject {
     func overlayCrossScreenImage(_ controller: OverlayWindowController) -> NSImage?
     func overlayDidChangeSnapMode(_ controller: OverlayWindowController)
     func overlayDidRequestRestoreLastSelection(_ controller: OverlayWindowController)
+    func overlayDidFinishSelection(_ controller: OverlayWindowController)
 }
 
 extension OverlayWindowControllerDelegate {
     func overlayDidRequestRestoreLastSelection(_ controller: OverlayWindowController) {}
+    func overlayDidFinishSelection(_ controller: OverlayWindowController) {}
     func overlayDidRequestCopyScrollCapture(_ controller: OverlayWindowController) {
         overlayDidRequestStopScrollCapture(controller)
     }
@@ -338,6 +340,41 @@ class OverlayWindowController {
         overlayView?.needsDisplay = true
     }
 
+    func forwardCrossDisplaySelectionEvent(_ event: NSEvent) -> Bool {
+        guard let view = overlayView, view.state == .selecting,
+              let targetWindow = overlayWindow else { return false }
+        guard event.type == .leftMouseDragged || event.type == .leftMouseUp else { return false }
+        if event.window === targetWindow { return false }
+
+        let targetPoint: NSPoint
+        if let sourceWindow = event.window {
+            targetPoint = CrossDisplayDragRouting.pointInTargetWindow(
+                event.locationInWindow,
+                sourceWindowFrame: sourceWindow.frame,
+                targetWindowFrame: targetWindow.frame)
+        } else {
+            targetPoint = targetWindow.convertPoint(fromScreen: NSEvent.mouseLocation)
+        }
+        guard let forwardedEvent = NSEvent.mouseEvent(
+            with: event.type,
+            location: targetPoint,
+            modifierFlags: event.modifierFlags,
+            timestamp: event.timestamp,
+            windowNumber: targetWindow.windowNumber,
+            context: nil,
+            eventNumber: event.eventNumber,
+            clickCount: event.clickCount,
+            pressure: event.pressure)
+        else { return false }
+
+        if event.type == .leftMouseDragged {
+            view.mouseDragged(with: forwardedEvent)
+        } else {
+            view.mouseUp(with: forwardedEvent)
+        }
+        return true
+    }
+
     /// Auto-select the full screen (as if user clicked without dragging).
     func applyFullScreenSelection() {
         overlayView?.applyFullScreenSelection()
@@ -583,7 +620,7 @@ extension OverlayWindowController: OverlayViewDelegate {
     }
 
     func overlayViewDidFinishSelection(_ rect: NSRect) {
-        // No-op: window is already key (.nonactivatingPanel + makeKeyAndOrderFront).
+        overlayDelegate?.overlayDidFinishSelection(self)
     }
 
     func overlayViewSelectionDidChange(_ rect: NSRect) {

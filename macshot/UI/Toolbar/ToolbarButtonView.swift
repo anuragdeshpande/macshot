@@ -77,6 +77,8 @@ class ToolbarButtonView: NSView {
     }
 
     override func draw(_ dirtyRect: NSRect) {
+        let radius = owningStrip?.usesSegmentedChrome == true ? bounds.width / 2 : Self.radius
+
         // Background
         let bg: NSColor
         if isPressed {
@@ -89,12 +91,12 @@ class ToolbarButtonView: NSView {
             bg = NSColor.clear
         }
         bg.setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius).fill()
+        NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).fill()
 
         // Mic level fill — green bar rising from the bottom inside the button
         if micLevel > 0.001 {
             NSGraphicsContext.saveGraphicsState()
-            NSBezierPath(roundedRect: bounds, xRadius: Self.radius, yRadius: Self.radius).addClip()
+            NSBezierPath(roundedRect: bounds, xRadius: radius, yRadius: radius).addClip()
             let fillH = bounds.height * CGFloat(min(micLevel, 1.0))
             let fillRect = NSRect(x: bounds.minX, y: bounds.minY, width: bounds.width, height: fillH)
             NSColor.systemGreen.withAlphaComponent(0.45).setFill()

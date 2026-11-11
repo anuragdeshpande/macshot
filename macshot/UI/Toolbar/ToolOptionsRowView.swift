@@ -4,6 +4,12 @@ import Cocoa
 /// Dynamically rebuilds its content when the selected tool changes.
 class ToolOptionsRowView: NSView, ChromeContent {
 
+    enum Orientation { case horizontal, vertical }
+
+    var orientation: Orientation = .horizontal
+    var chromeCornerRadius: CGFloat {
+        orientation == .vertical ? min(bounds.width, bounds.height) / 2 : 10
+    }
     weak var overlayView: OverlayView?
     private(set) var currentTool: AnnotationTool?
     /// When set, the options row edits this annotation's properties instead of global tool state.
@@ -44,6 +50,16 @@ class ToolOptionsRowView: NSView, ChromeContent {
     /// provides the background, so the row clears its own solid layer fill (ChromeContent).
     var hostedInGlassPanel = false {
         didSet { layer?.backgroundColor = hostedInGlassPanel ? NSColor.clear.cgColor : ToolbarLayout.bgColor.cgColor }
+    }
+
+    static func supportsOptions(for tool: AnnotationTool) -> Bool {
+        switch tool {
+        case .pencil, .line, .arrow, .rectangle, .ellipse, .marker, .number, .loupe,
+            .measure, .pixelate, .stamp, .highlight, .text:
+            return true
+        default:
+            return false
+        }
     }
 
     override init(frame: NSRect) {
@@ -112,6 +128,7 @@ class ToolOptionsRowView: NSView, ChromeContent {
         // Remove old subviews
         subviews.forEach { $0.removeFromSuperview() }
         guard let ov = overlayView else { return }
+        defer { applyOrientationLayout() }
 
         currentTool = tool
         var curX: CGFloat = padding
@@ -293,10 +310,70 @@ class ToolOptionsRowView: NSView, ChromeContent {
 
     private func addSeparator(at x: CGFloat) -> CGFloat {
         let sep = NSView(frame: NSRect(x: x + 6, y: 8, width: 1, height: rowHeight - 16))
+        sep.identifier = NSUserInterfaceItemIdentifier("tool-options-separator")
         sep.wantsLayer = true
         sep.layer?.backgroundColor = ToolbarLayout.iconColor.withAlphaComponent(0.1).cgColor
         addSubview(sep)
         return x + 13
+    }
+
+    private func applyOrientationLayout() {
+        guard orientation == .vertical else {
+            layer?.cornerRadius = 6
+            return
+        }
+
+        let separators = subviews
+            .filter { $0.identifier == NSUserInterfaceItemIdentifier("tool-options-separator") }
+            .sorted { $0.frame.midX < $1.frame.midX }
+        var groups = Array(repeating: [NSView](), count: separators.count + 1)
+        for view in subviews where view.identifier != NSUserInterfaceItemIdentifier("tool-options-separator") {
+            let groupIndex = separators.filter { $0.frame.midX < view.frame.midX }.count
+            groups[groupIndex].append(view)
+        }
+        groups.removeAll { $0.isEmpty }
+        guard !groups.isEmpty else { return }
+
+        let sectionSpacing: CGFloat = 4
+        let sectionMetrics = groups.map { group -> (minX: CGFloat, minY: CGFloat, width: CGFloat, height: CGFloat) in
+            let minX = group.map(\.frame.minX).min() ?? 0
+            let minY = group.map(\.frame.minY).min() ?? 0
+            let maxX = group.map(\.frame.maxX).max() ?? minX
+            let maxY = group.map(\.frame.maxY).max() ?? minY
+            return (minX, minY, maxX - minX, maxY - minY)
+        }
+        let width = max(96, (sectionMetrics.map(\.width).max() ?? 0) + padding * 2)
+        let height = padding * 2
+            + sectionMetrics.reduce(CGFloat.zero) { $0 + max(rowHeight, $1.height) }
+            + CGFloat(max(0, groups.count - 1)) * sectionSpacing
+        var top = height - padding
+
+        for index in groups.indices {
+            let metrics = sectionMetrics[index]
+            let sectionHeight = max(rowHeight, metrics.height)
+            let sectionY = top - sectionHeight + (sectionHeight - metrics.height) / 2
+            for view in groups[index] {
+                let oldFrame = view.frame
+                view.frame.origin = NSPoint(
+                    x: padding + oldFrame.minX - metrics.minX,
+                    y: sectionY + oldFrame.minY - metrics.minY)
+            }
+            top -= sectionHeight
+            if index < groups.count - 1 {
+                let separator = separators.indices.contains(index) ? separators[index] : nil
+                let separatorY = top - sectionSpacing / 2
+                separator?.frame = NSRect(
+                    x: padding,
+                    y: separatorY,
+                    width: max(0, width - padding * 2),
+                    height: 1)
+                top -= sectionSpacing
+            }
+        }
+
+        contentWidth = width
+        frame.size = NSSize(width: width, height: height)
+        layer?.cornerRadius = 8
     }
 
     private func addStrokeSlider(at x: CGFloat, tool: AnnotationTool, ov: OverlayView) -> CGFloat {

@@ -27,8 +27,9 @@ final class OverlayChromePresenter {
     /// Present `content` at `overlayRect` within `overlayView` (or `inlineHostParent` in editor mode).
     func present(_ content: ChromeContent & NSView, overlayRect: NSRect,
                  visible: Bool, glass: Bool, in overlayView: NSView,
-                 inlineHostParent: NSView? = nil) {
+                 inlineHostParent: NSView? = nil, cornerRadius overrideCornerRadius: CGFloat? = nil) {
         let targetParent = inlineHostParent ?? overlayView
+        let panelCornerRadius = overrideCornerRadius ?? cornerRadius
         guard glass, visible, overlayRect.width > 1, overlayRect.height > 1 else {
             reclaim(content, to: targetParent)
             return
@@ -39,7 +40,7 @@ final class OverlayChromePresenter {
         if glassHost == nil {
             savedAutoresizingMask = content.autoresizingMask
             content.removeFromSuperview()
-            if let host = LiquidGlass.host(content, frame: overlayRect, cornerRadius: cornerRadius) {
+            if let host = LiquidGlass.host(content, frame: overlayRect, cornerRadius: panelCornerRadius) {
                 host.autoresizingMask = savedAutoresizingMask
                 targetParent.addSubview(host)
                 glassHost = host
@@ -57,7 +58,7 @@ final class OverlayChromePresenter {
             host.frame = overlayRect
             host.isHidden = false
             if #available(macOS 26.0, *), let glassView = host as? NSGlassEffectView {
-                glassView.cornerRadius = cornerRadius
+                glassView.cornerRadius = panelCornerRadius
                 glassView.contentView?.frame = glassView.bounds
             }
         }
