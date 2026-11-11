@@ -103,6 +103,88 @@ final class CrossDisplayDragSelectionTests: XCTestCase {
             "only the visible portion should be clipped to the peer display")
     }
 
+    func testSameWindowDragUsesScreenLocationAfterPointerLeavesDisplay() throws {
+        let controller = OverlayWindowController(screen: try mainScreenOrSkip())
+        let window = try XCTUnwrap(NSApp.window(withWindowNumber: Int(controller.windowNumber)))
+        let view = try XCTUnwrap(overlayView(in: controller))
+        window.setFrame(NSRect(x: 0, y: 0, width: 400, height: 300), display: false)
+        window.makeKeyAndOrderFront(nil)
+        defer { controller.dismiss() }
+
+        view.mouseDown(with: mouseEvent(.leftMouseDown, at: NSPoint(x: 350, y: 250), in: window))
+
+        let edgeEvent = mouseEvent(.leftMouseDragged, at: NSPoint(x: 399, y: 160), in: window)
+        XCTAssertEqual(edgeEvent.locationInWindow, NSPoint(x: 399, y: 160))
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            edgeEvent,
+            mouseLocationOnScreen: NSPoint(x: 450, y: 160)))
+        XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 160, width: 100, height: 90))
+
+        let resumeEvent = mouseEvent(.leftMouseDragged, at: NSPoint(x: 380, y: 200), in: window)
+        XCTAssertFalse(controller.forwardCrossDisplaySelectionEvent(
+            resumeEvent,
+            mouseLocationOnScreen: NSPoint(x: 380, y: 200)))
+        view.mouseDragged(with: resumeEvent)
+        XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 200, width: 30, height: 50))
+
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            edgeEvent,
+            mouseLocationOnScreen: NSPoint(x: 450, y: 160)))
+        XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 160, width: 100, height: 90))
+
+        let release = mouseEvent(.leftMouseUp, at: NSPoint(x: 399, y: 160), in: window)
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            release,
+            mouseLocationOnScreen: NSPoint(x: 450, y: 160)))
+        XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 160, width: 100, height: 90))
+    }
+
+    func testSameWindowDragCrossesLeftFromNegativeDisplayOrigin() throws {
+        let controller = OverlayWindowController(screen: try mainScreenOrSkip())
+        let window = try XCTUnwrap(NSApp.window(withWindowNumber: Int(controller.windowNumber)))
+        let view = try XCTUnwrap(overlayView(in: controller))
+        window.setFrame(NSRect(x: -400, y: -300, width: 400, height: 300), display: false)
+        window.makeKeyAndOrderFront(nil)
+        defer { controller.dismiss() }
+
+        view.mouseDown(with: mouseEvent(.leftMouseDown, at: NSPoint(x: 50, y: 180), in: window))
+
+        let edgeEvent = mouseEvent(.leftMouseDragged, at: NSPoint(x: 0, y: 100), in: window)
+        XCTAssertEqual(edgeEvent.locationInWindow, NSPoint(x: 0, y: 100))
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            edgeEvent,
+            mouseLocationOnScreen: NSPoint(x: -450, y: -200)))
+        XCTAssertEqual(controller.selectionRect, NSRect(x: -50, y: 100, width: 100, height: 80))
+
+        let release = mouseEvent(.leftMouseUp, at: NSPoint(x: 0, y: 100), in: window)
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            release,
+            mouseLocationOnScreen: NSPoint(x: -450, y: -200)))
+    }
+
+    func testSameWindowDragCrossesVerticallyAtNegativeDisplayOrigin() throws {
+        let controller = OverlayWindowController(screen: try mainScreenOrSkip())
+        let window = try XCTUnwrap(NSApp.window(withWindowNumber: Int(controller.windowNumber)))
+        let view = try XCTUnwrap(overlayView(in: controller))
+        window.setFrame(NSRect(x: -400, y: -300, width: 400, height: 300), display: false)
+        window.makeKeyAndOrderFront(nil)
+        defer { controller.dismiss() }
+
+        view.mouseDown(with: mouseEvent(.leftMouseDown, at: NSPoint(x: 200, y: 50), in: window))
+
+        let edgeEvent = mouseEvent(.leftMouseDragged, at: NSPoint(x: 250, y: 0), in: window)
+        XCTAssertEqual(edgeEvent.locationInWindow, NSPoint(x: 250, y: 0))
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            edgeEvent,
+            mouseLocationOnScreen: NSPoint(x: -150, y: -350)))
+        XCTAssertEqual(controller.selectionRect, NSRect(x: 200, y: -50, width: 50, height: 100))
+
+        let release = mouseEvent(.leftMouseUp, at: NSPoint(x: 250, y: 0), in: window)
+        XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+            release,
+            mouseLocationOnScreen: NSPoint(x: -150, y: -350)))
+    }
+
     func testRestoredSelectionCanBeResizedAcrossDisplayWindows() throws {
         let screen = try mainScreenOrSkip()
         let target = OverlayWindowController(screen: screen)

@@ -360,23 +360,26 @@ class OverlayWindowController {
     }
 
     func forwardCrossDisplaySelectionEvent(
-        _ event: NSEvent
+        _ event: NSEvent,
+        mouseLocationOnScreen: NSPoint = NSEvent.mouseLocation
     ) -> Bool {
         guard let view = overlayView,
               view.state == .selecting
                 || view.isResizingCrossDisplaySelection,
               let targetWindow = overlayWindow else { return false }
         guard event.type == .leftMouseDragged || event.type == .leftMouseUp else { return false }
-        if event.window === targetWindow { return false }
 
         let targetPoint: NSPoint
-        if let sourceWindow = event.window {
+        if let sourceWindow = event.window, sourceWindow === targetWindow {
+            guard !targetWindow.frame.contains(mouseLocationOnScreen) else { return false }
+            targetPoint = targetWindow.convertPoint(fromScreen: mouseLocationOnScreen)
+        } else if let sourceWindow = event.window {
             targetPoint = CrossDisplayDragRouting.pointInTargetWindow(
                 event.locationInWindow,
                 sourceWindowFrame: sourceWindow.frame,
                 targetWindowFrame: targetWindow.frame)
         } else {
-            targetPoint = targetWindow.convertPoint(fromScreen: NSEvent.mouseLocation)
+            targetPoint = targetWindow.convertPoint(fromScreen: mouseLocationOnScreen)
         }
         guard let forwardedEvent = NSEvent.mouseEvent(
             with: event.type,
