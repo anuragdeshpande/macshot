@@ -694,13 +694,33 @@ private class AddCaptureOverlayHandler: NSObject, OverlayWindowControllerDelegat
     }
 
     func overlayDidConfirm(_ controller: OverlayWindowController, capturedImage: NSImage?, annotationData: CaptureAnnotationData?) {
-        let image = capturedImage ?? overlayCrossScreenImage(controller)
+        let image: NSImage?
+        if let capturedImage {
+            image = capturedImage
+        } else {
+            switch overlayCrossScreenImage(controller) {
+            case .image(let stitchedImage):
+                image = stitchedImage
+            case .failed:
+                overlayDidFailCapture(controller, message: L("Save failed"))
+                image = nil
+            case .notSpanning:
+                image = nil
+            }
+        }
         dismissOverlays()
         if let image = image {
             onCapture?(image)
         } else {
             onCancel?()
         }
+    }
+
+    func overlayDidFailCapture(_ controller: OverlayWindowController, message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: L("OK"))
+        alert.runModal()
     }
 
     func overlayDidRequestPin(_ controller: OverlayWindowController, image: NSImage, annotationData: CaptureAnnotationData?) {
@@ -737,9 +757,14 @@ private class AddCaptureOverlayHandler: NSObject, OverlayWindowControllerDelegat
     func overlayDidRemoteResizeSelection(_ controller: OverlayWindowController, globalRect: NSRect) {}
     func overlayDidFinishRemoteResize(_ controller: OverlayWindowController, globalRect: NSRect) {}
 
-    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> NSImage? {
-        let others = overlayControllers.filter { $0 !== controller && $0.remoteSelectionRect.width >= 1 }
-        guard !others.isEmpty else { return nil }
+    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> CrossScreenCaptureResult {
+        let others = overlayControllers.filter {
+            $0 !== controller && $0.remoteSelectionRect.width >= 1 && $0.remoteSelectionRect.height >= 1
+        }
+        guard !others.isEmpty else { return .notSpanning }
+        guard controller.screenshotImage != nil,
+              others.allSatisfy({ $0.screenshotImage != nil })
+        else { return .failed }
         // Use AppDelegate's stitch method via direct replication (avoid tight coupling)
         let primaryOrigin = controller.screen.frame.origin
         let primarySel = controller.selectionRect
@@ -752,11 +777,11 @@ private class AddCaptureOverlayHandler: NSObject, OverlayWindowControllerDelegat
         let cs = CGColorSpace(name: CGColorSpace.sRGB)!
         guard let cgCtx = CGContext(data: nil, width: pixelW, height: pixelH,
                                      bitsPerComponent: 8, bytesPerRow: pixelW * 4,
-                                     space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+                                     space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return .failed }
         cgCtx.scaleBy(x: scale, y: scale)
         let allControllers = [controller] + others
         for c in allControllers {
-            guard let screenshot = c.screenshotImage else { continue }
+            guard let screenshot = c.screenshotImage else { return .failed }
             let screenFrame = c.screen.frame
             let drawX = screenFrame.origin.x - globalRect.origin.x
             let drawY = screenFrame.origin.y - globalRect.origin.y
@@ -770,8 +795,8 @@ private class AddCaptureOverlayHandler: NSObject, OverlayWindowControllerDelegat
             NSGraphicsContext.restoreGraphicsState()
             cgCtx.restoreGState()
         }
-        guard let cgImage = cgCtx.makeImage() else { return nil }
-        return NSImage(cgImage: cgImage, size: globalRect.size)
+        guard let cgImage = cgCtx.makeImage() else { return .failed }
+        return .image(NSImage(cgImage: cgImage, size: globalRect.size))
     }
 
     func overlayDidChangeSnapMode(_ controller: OverlayWindowController) {

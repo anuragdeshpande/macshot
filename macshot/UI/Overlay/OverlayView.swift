@@ -190,6 +190,9 @@ class OverlayView: NSView {
     private var isAnchoredSelecting: Bool = false
     private var isDraggingSelection: Bool = false
     private var isResizingSelection: Bool = false
+    var isResizingCrossDisplaySelection: Bool {
+        isResizingSelection || isResizingRemoteSelection
+    }
     private var resizeHandle: ResizeHandle = .none
     private var dragOffset: NSPoint = .zero
     private var lastDragPoint: NSPoint?  // for shift constraint on flagsChanged
@@ -1464,7 +1467,7 @@ class OverlayView: NSView {
         }
         toolOptionsPopoverController = controller
         toolOptionsPopoverTool = tool
-        controller.show(relativeTo: button.bounds, of: button, preferredEdge: .maxX)
+        controller.show(relativeTo: button.bounds, of: button, preferredEdge: .minX)
     }
 
     private func toolbarTitle(for tool: AnnotationTool) -> String {
@@ -1961,8 +1964,7 @@ class OverlayView: NSView {
 
                         NSGraphicsContext.saveGraphicsState()
                         outsideSelection.addClip()
-                        if !usesExternalScreenshotPreview,
-                           let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                        if let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
                            let blurred = outsideSelectionBlur.image(for: source) {
                             NSImage(cgImage: blurred, size: image.size)
                                 .draw(in: bounds, from: .zero, operation: .copy, fraction: 1)
@@ -5505,7 +5507,13 @@ class OverlayView: NSView {
         bottomStrip.isHidden = !visible || !bottomHasButtons
         let rightHasButtons = rightStrip.buttonViews.count > 0
         rightStrip.isHidden = !visible || !rightHasButtons
-        toolOptionsRowView?.isHidden = !visible || !toolHasOptionsRow || !bottomHasButtons
+        toolOptionsRowView?.isHidden = !visible
+            || !ToolOptionsRowView.shouldShowInlineOptionsRow(
+                inEditorMode: isEditorMode,
+                showBeautifyOptions: showBeautifyInOptionsRow,
+                editingAnnotation: selectedAnnotation != nil && toolOptionsRowView?.editingAnnotation != nil)
+            || !toolHasOptionsRow
+            || !bottomHasButtons
         guard visible else {
             // Toolbars hidden (deselected / scroll capture): also dismiss the
             // glass chrome panels so they don't linger as clickable windows, and
@@ -10134,6 +10142,93 @@ class OverlayView: NSView {
         return renderSelectedRegion(includeAnnotations: false)
     }
 
+    /// Add this view's annotations to an already stitched, selection-sized source image.
+    func compositeSelectedRegion(
+        over rawImage: NSImage,
+        preparedAnnotations: [Annotation]? = nil
+    ) -> NSImage? {
+        guard selectionRect.width > 0, selectionRect.height > 0 else { return nil }
+        guard !annotations.isEmpty else { return rawImage }
+        guard let captureAnnotations = preparedAnnotations ?? captureAnnotations(over: rawImage) else {
+            return nil
+        }
+        guard let source = rawImage.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            return nil
+        }
+
+        let pixelWidth = source.width
+        let pixelHeight = source.height
+        let colorSpace = source.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!
+        guard let cgContext = CGContext(
+            data: nil,
+            width: pixelWidth,
+            height: pixelHeight,
+            bitsPerComponent: 8,
+            bytesPerRow: pixelWidth * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        cgContext.interpolationQuality = .none
+        cgContext.scaleBy(
+            x: CGFloat(pixelWidth) / selectionRect.width,
+            y: CGFloat(pixelHeight) / selectionRect.height)
+
+        let graphicsContext = NSGraphicsContext(cgContext: cgContext, flipped: false)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = graphicsContext
+        rawImage.draw(
+            in: NSRect(origin: .zero, size: selectionRect.size),
+            from: .zero,
+            operation: .copy,
+            fraction: 1.0)
+        drawCaptureAnnotations(
+            captureAnnotations,
+            dimBounds: NSRect(origin: .zero, size: selectionRect.size),
+            in: graphicsContext)
+        NSGraphicsContext.restoreGraphicsState()
+
+        guard let composited = cgContext.makeImage() else { return nil }
+        return NSImage(cgImage: composited, size: selectionRect.size)
+    }
+
+    /// Return image-local annotation copies ready to render over a selection-sized source.
+    func captureAnnotations(over rawImage: NSImage) -> [Annotation]? {
+        let selectionOrigin = selectionRect.origin
+        let sourceBounds = NSRect(origin: .zero, size: selectionRect.size)
+        var result: [Annotation] = []
+        result.reserveCapacity(annotations.count)
+
+        for annotation in annotations {
+            let copy = annotation.clone()
+            copy.move(dx: -selectionOrigin.x, dy: -selectionOrigin.y)
+
+            switch copy.tool {
+            case .pixelate, .blur, .loupe:
+                copy.sourceImage = rawImage
+                copy.sourceImageBounds = sourceBounds
+                copy.bakedBlurNSImage = nil
+                if copy.tool == .loupe, let sourceRect = copy.loupeSourceRect {
+                    copy.loupeSourceRect = sourceRect.offsetBy(
+                        dx: -selectionOrigin.x,
+                        dy: -selectionOrigin.y)
+                }
+
+                if copy.tool == .loupe {
+                    copy.bakeLoupe()
+                } else {
+                    copy.bakePixelate()
+                }
+                guard copy.bakedBlurNSImage != nil else { return nil }
+            default:
+                break
+            }
+
+            result.append(copy)
+        }
+        return result
+    }
+
     private func renderSelectedRegion(includeAnnotations: Bool) -> NSImage? {
         guard selectionRect.width > 0, selectionRect.height > 0 else { return nil }
 
@@ -10205,22 +10300,32 @@ class OverlayView: NSView {
         }
 
         if includeAnnotations {
-            // Match the live draw order: censor effects first, then the spotlight
-            // dim (union of highlight rects), then the regular shape annotations
-            // on top — so the exported image matches what's on screen.
-            for annotation in annotations where annotation.tool == .pixelate {
-                annotation.draw(in: nsContext)
-            }
-            Annotation.drawHighlightDim(for: annotations, in: highlightDimBounds)
-            for annotation in annotations where annotation.tool != .pixelate {
-                annotation.draw(in: nsContext)
-            }
+            drawCaptureAnnotations(in: nsContext)
         }
 
         NSGraphicsContext.restoreGraphicsState()
 
         guard let cgImage = cgCtx.makeImage() else { return nil }
         return NSImage(cgImage: cgImage, size: snappedRect.size)
+    }
+
+    private func drawCaptureAnnotations(in context: NSGraphicsContext) {
+        drawCaptureAnnotations(annotations, dimBounds: highlightDimBounds, in: context)
+    }
+
+    private func drawCaptureAnnotations(
+        _ annotationsToDraw: [Annotation],
+        dimBounds: NSRect,
+        in context: NSGraphicsContext
+    ) {
+        // Keep capture rendering aligned with the live annotation draw order.
+        for annotation in annotationsToDraw where annotation.tool == .pixelate {
+            annotation.draw(in: context)
+        }
+        Annotation.drawHighlightDim(for: annotationsToDraw, in: dimBounds)
+        for annotation in annotationsToDraw where annotation.tool != .pixelate {
+            annotation.draw(in: context)
+        }
     }
 
     // MARK: - Cleanup
@@ -10261,7 +10366,7 @@ class OverlayView: NSView {
                     ann.sourceImage = img
                     ann.sourceImageBounds = bounds
                     if ann.tool == .loupe { ann.bakeLoupe() }
-                    if ann.tool == .pixelate { ann.bakePixelate() }
+                    if ann.tool == .pixelate || ann.tool == .blur { ann.bakePixelate() }
                 }
             }
         }

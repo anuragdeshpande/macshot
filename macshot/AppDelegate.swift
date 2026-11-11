@@ -1456,7 +1456,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
             if pendingScrollCaptureMode { controller.setAutoScrollCaptureMode() }
             controllers.append(controller)
         }
-        overlayControllers.append(contentsOf: controllers)
+        registerOverlayControllers(controllers)
 
         pendingRecordMode = false
         let didApplyFullScreenRecord = pendingFullScreenRecord
@@ -1653,6 +1653,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         restoreLastSelection(controllers: overlayControllers)
     }
 
+    func registerOverlayControllers(_ controllers: [OverlayWindowController]) {
+        overlayControllers.append(contentsOf: controllers)
+    }
+
     /// Apply the stored last selection rect to the matching overlay controller.
     private func restoreLastSelection(controllers: [OverlayWindowController]) {
         guard let rectStr = UserDefaults.standard.string(forKey: "lastSelectionRect"),
@@ -1662,6 +1666,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SPUUpdaterDelegate {
         guard savedRect.width > 1, savedRect.height > 1 else { return }
         for controller in controllers where controller.screen.frame == savedScreenFrame {
             controller.applySelection(savedRect)
+            installCrossDisplaySelectionEventMonitor()
             // The install loop made the LAST overlay it showed the key window,
             // but keyboard handling (Cmd+C, F, Enter) is per-window and gated
             // on that window's own selection state — so key focus must follow
@@ -2551,9 +2556,14 @@ extension AppDelegate: OverlayWindowControllerDelegate {
             engine.stopRecording()
             // stopRecordingUI() will be called by onCompletion callback
         }
+
         dismissOverlays()
 
         // Focus is returned to the previous app by dismissOverlays() above.
+    }
+
+    func overlayDidFailCapture(_ controller: OverlayWindowController, message: String) {
+        showFailureToast(message)
     }
 
     func overlayDidConfirm(_ controller: OverlayWindowController, capturedImage: NSImage?, annotationData: CaptureAnnotationData?) {
@@ -2597,62 +2607,21 @@ extension AppDelegate: OverlayWindowControllerDelegate {
     }
 
     private func stitchCrossScreenCapture(primary: OverlayWindowController, others: [OverlayWindowController]) -> NSImage? {
-        let primaryOrigin = primary.screen.frame.origin
-        let primarySelRect = primary.selectionRect
-        // Global selection rect
-        let globalRect = NSRect(x: primarySelRect.origin.x + primaryOrigin.x,
-                                y: primarySelRect.origin.y + primaryOrigin.y,
-                                width: primarySelRect.width, height: primarySelRect.height)
-
-        // Determine scale from primary screen
-        let scale: CGFloat
-        if let screenshot = primary.screenshotImage,
-           let cg = screenshot.cgImage(forProposedRect: nil, context: nil, hints: nil) {
-            scale = CGFloat(cg.width) / screenshot.size.width
-        } else {
-            scale = primary.screen.backingScaleFactor
+        guard primary.screenshotImage != nil,
+              others.allSatisfy({ $0.screenshotImage != nil })
+        else { return nil }
+        let otherScreens = others.compactMap { controller in
+            controller.screenshotImage.map {
+                CrossScreenCaptureImage(frame: controller.screen.frame, image: $0)
+            }
         }
-
-        let pixelW = Int(globalRect.width * scale)
-        let pixelH = Int(globalRect.height * scale)
-        // Use the source image's color space to avoid expensive conversion
-        let cs: CGColorSpace
-        if let screenshot = primary.screenshotImage,
-           let cg = screenshot.cgImage(forProposedRect: nil, context: nil, hints: nil),
-           let srcCS = cg.colorSpace {
-            cs = srcCS
-        } else {
-            cs = CGColorSpace(name: CGColorSpace.sRGB)!
-        }
-        guard let cgCtx = CGContext(data: nil, width: pixelW, height: pixelH,
-                                     bitsPerComponent: 8, bytesPerRow: pixelW * 4,
-                                     space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-
-        cgCtx.scaleBy(x: scale, y: scale)
-
-        // Draw each screen's contribution
-        let allControllers = [primary] + others
-        for controller in allControllers {
-            guard let screenshot = controller.screenshotImage else { continue }
-            let screenFrame = controller.screen.frame
-            // Where this screen sits relative to the global selection rect
-            let drawX = screenFrame.origin.x - globalRect.origin.x
-            let drawY = screenFrame.origin.y - globalRect.origin.y
-            let drawRect = NSRect(x: drawX, y: drawY, width: screenFrame.width, height: screenFrame.height)
-
-            cgCtx.saveGState()
-            // Clip to only the portion within our output bounds
-            cgCtx.clip(to: CGRect(x: 0, y: 0, width: globalRect.width, height: globalRect.height))
-            let nsContext = NSGraphicsContext(cgContext: cgCtx, flipped: false)
-            NSGraphicsContext.saveGraphicsState()
-            NSGraphicsContext.current = nsContext
-            screenshot.draw(in: drawRect, from: .zero, operation: .copy, fraction: 1.0)
-            NSGraphicsContext.restoreGraphicsState()
-            cgCtx.restoreGState()
-        }
-
-        guard let cgImage = cgCtx.makeImage() else { return nil }
-        return NSImage(cgImage: cgImage, size: globalRect.size)
+        guard otherScreens.count == others.count else { return nil }
+        return CrossScreenCaptureStitcher.stitch(
+            primarySelection: primary.selectionRect,
+            primaryFrame: primary.screen.frame,
+            primaryBackingScale: primary.screen.backingScaleFactor,
+            primaryImage: primary.screenshotImage,
+            otherScreens: otherScreens)
     }
 
     func overlayDidRequestPin(_ controller: OverlayWindowController, image: NSImage, annotationData: CaptureAnnotationData?) {
@@ -3454,16 +3423,7 @@ extension AppDelegate: OverlayWindowControllerDelegate {
     func overlayDidBeginSelection(_ controller: OverlayWindowController) {
         captureTimingTrace?.mark("user began selection")
         crossDisplaySelectionController = controller
-        if crossDisplaySelectionEventMonitor == nil {
-            crossDisplaySelectionEventMonitor = NSEvent.addLocalMonitorForEvents(
-                matching: [.leftMouseDragged, .leftMouseUp]
-            ) { [weak self] event in
-                guard let self,
-                      self.crossDisplaySelectionController?.forwardCrossDisplaySelectionEvent(event) == true
-                else { return event }
-                return nil
-            }
-        }
+        installCrossDisplaySelectionEventMonitor()
         // The user committed to one screen. Also drop the auto-translate flag on
         // the other overlays: this mode leaves overlays open, so a still-set flag
         // there would auto-translate again if the user later drew on that screen.
@@ -3477,8 +3437,39 @@ extension AppDelegate: OverlayWindowControllerDelegate {
     }
 
     func overlayDidFinishSelection(_ controller: OverlayWindowController) {
-        guard crossDisplaySelectionController === controller else { return }
-        stopCrossDisplaySelectionMonitoring()
+        if crossDisplaySelectionController === controller {
+            crossDisplaySelectionController = nil
+        }
+        // Keep the monitor for handle drags that begin after the selection has
+        // settled. It is removed with the overlays, not at the first mouse-up.
+        installCrossDisplaySelectionEventMonitor()
+    }
+
+    private func installCrossDisplaySelectionEventMonitor() {
+        guard crossDisplaySelectionEventMonitor == nil else { return }
+        crossDisplaySelectionEventMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]
+        ) { [weak self] event in
+            guard let self else { return event }
+            if event.type == .leftMouseDown {
+                self.crossDisplaySelectionController =
+                    (event.window as? OverlayWindow)?.selectionController
+                return event
+            }
+
+            guard let controller = self.crossDisplaySelectionController else { return event }
+            guard controller.hasActiveCrossDisplaySelectionGesture else {
+                if event.type == .leftMouseUp {
+                    self.crossDisplaySelectionController = nil
+                }
+                return event
+            }
+            let forwarded = controller.forwardCrossDisplaySelectionEvent(event)
+            if event.type == .leftMouseUp {
+                self.crossDisplaySelectionController = nil
+            }
+            return forwarded ? nil : event
+        }
     }
 
     private func stopCrossDisplaySelectionMonitoring() {
@@ -3545,10 +3536,13 @@ extension AppDelegate: OverlayWindowControllerDelegate {
         }
     }
 
-    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> NSImage? {
+    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> CrossScreenCaptureResult {
         let others = overlayControllers.filter { $0 !== controller && $0.remoteSelectionRect.width >= 1 && $0.remoteSelectionRect.height >= 1 }
-        guard !others.isEmpty else { return nil }
-        return stitchCrossScreenCapture(primary: controller, others: others)
+        guard !others.isEmpty else { return .notSpanning }
+        guard let image = stitchCrossScreenCapture(primary: controller, others: others) else {
+            return .failed
+        }
+        return .image(image)
     }
 
     func overlayDidChangeSnapMode(_ controller: OverlayWindowController) {

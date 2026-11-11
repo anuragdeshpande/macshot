@@ -8,8 +8,17 @@ class ToolOptionsRowView: NSView, ChromeContent {
 
     var orientation: Orientation = .horizontal
     var chromeCornerRadius: CGFloat {
-        orientation == .vertical ? min(bounds.width, bounds.height) / 2 : 10
+        orientation == .vertical ? 8 : 10
     }
+
+    static func shouldShowInlineOptionsRow(
+        inEditorMode: Bool,
+        showBeautifyOptions: Bool,
+        editingAnnotation: Bool
+    ) -> Bool {
+        inEditorMode || showBeautifyOptions || editingAnnotation
+    }
+
     weak var overlayView: OverlayView?
     private(set) var currentTool: AnnotationTool?
     /// When set, the options row edits this annotation's properties instead of global tool state.

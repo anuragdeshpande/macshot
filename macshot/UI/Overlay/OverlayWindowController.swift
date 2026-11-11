@@ -61,8 +61,16 @@ private final class ScreenshotOverlayRootView: NSView {
 }
 
 @MainActor
+enum CrossScreenCaptureResult {
+    case notSpanning
+    case image(NSImage)
+    case failed
+}
+
+@MainActor
 protocol OverlayWindowControllerDelegate: AnyObject {
     func overlayDidCancel(_ controller: OverlayWindowController)
+    func overlayDidFailCapture(_ controller: OverlayWindowController, message: String)
     func overlayDidConfirm(_ controller: OverlayWindowController, capturedImage: NSImage?, annotationData: CaptureAnnotationData?)
     func overlayDidRequestPin(_ controller: OverlayWindowController, image: NSImage, annotationData: CaptureAnnotationData?)
     func overlayDidRequestOCR(_ controller: OverlayWindowController, result: OCRScanResult, image: NSImage?)
@@ -81,13 +89,17 @@ protocol OverlayWindowControllerDelegate: AnyObject {
     func overlayDidChangeSelection(_ controller: OverlayWindowController, globalRect: NSRect)
     func overlayDidRemoteResizeSelection(_ controller: OverlayWindowController, globalRect: NSRect)
     func overlayDidFinishRemoteResize(_ controller: OverlayWindowController, globalRect: NSRect)
-    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> NSImage?
+    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> CrossScreenCaptureResult
     func overlayDidChangeSnapMode(_ controller: OverlayWindowController)
     func overlayDidRequestRestoreLastSelection(_ controller: OverlayWindowController)
     func overlayDidFinishSelection(_ controller: OverlayWindowController)
 }
 
 extension OverlayWindowControllerDelegate {
+    func overlayCrossScreenImage(_ controller: OverlayWindowController) -> CrossScreenCaptureResult {
+        .notSpanning
+    }
+    func overlayDidFailCapture(_ controller: OverlayWindowController, message: String) {}
     func overlayDidRequestRestoreLastSelection(_ controller: OverlayWindowController) {}
     func overlayDidFinishSelection(_ controller: OverlayWindowController) {}
     func overlayDidRequestCopyScrollCapture(_ controller: OverlayWindowController) {
@@ -99,6 +111,12 @@ extension OverlayWindowControllerDelegate {
 /// Does NOT subclass NSWindowController to avoid AppKit retain-cycle issues.
 @MainActor
 class OverlayWindowController {
+
+    private struct CaptureRegionSnapshot {
+        let image: NSImage
+        let rawCrossScreenImage: NSImage?
+        let preparedAnnotations: [Annotation]?
+    }
 
     weak var overlayDelegate: OverlayWindowControllerDelegate?
     var capturedWindowTitle: String?
@@ -185,6 +203,7 @@ class OverlayWindowController {
             backing: .buffered,
             defer: false
         )
+        window.selectionController = self
         window.level = NSWindow.Level(257)
         window.isOpaque = false
         window.backgroundColor = .clear
@@ -340,8 +359,12 @@ class OverlayWindowController {
         overlayView?.needsDisplay = true
     }
 
-    func forwardCrossDisplaySelectionEvent(_ event: NSEvent) -> Bool {
-        guard let view = overlayView, view.state == .selecting,
+    func forwardCrossDisplaySelectionEvent(
+        _ event: NSEvent
+    ) -> Bool {
+        guard let view = overlayView,
+              view.state == .selecting
+                || view.isResizingCrossDisplaySelection,
               let targetWindow = overlayWindow else { return false }
         guard event.type == .leftMouseDragged || event.type == .leftMouseUp else { return false }
         if event.window === targetWindow { return false }
@@ -373,6 +396,11 @@ class OverlayWindowController {
             view.mouseUp(with: forwardedEvent)
         }
         return true
+    }
+
+    var hasActiveCrossDisplaySelectionGesture: Bool {
+        guard let view = overlayView else { return false }
+        return view.state == .selecting || view.isResizingCrossDisplaySelection
     }
 
     /// Auto-select the full screen (as if user clicked without dragging).
@@ -530,42 +558,90 @@ class OverlayWindowController {
         CaptureSound.shared.play()
     }
 
+    private func captureRegionSnapshot() -> CaptureRegionSnapshot? {
+        guard let view = overlayView else { return nil }
+        switch overlayDelegate?.overlayCrossScreenImage(self) ?? .notSpanning {
+        case .notSpanning:
+            guard let image = view.captureSelectedRegion() else { return nil }
+            return CaptureRegionSnapshot(
+                image: image,
+                rawCrossScreenImage: nil,
+                preparedAnnotations: nil)
+        case .failed:
+            reportCaptureFailure()
+            return nil
+        case .image(let rawImage):
+            guard let preparedAnnotations = view.captureAnnotations(over: rawImage),
+                  let image = view.compositeSelectedRegion(
+                    over: rawImage,
+                    preparedAnnotations: preparedAnnotations)
+            else {
+                reportCaptureFailure()
+                return nil
+            }
+            return CaptureRegionSnapshot(
+                image: image,
+                rawCrossScreenImage: rawImage,
+                preparedAnnotations: preparedAnnotations)
+        }
+    }
+
     private func captureRegion() -> NSImage? {
-        return overlayDelegate?.overlayCrossScreenImage(self)
-            ?? overlayView?.captureSelectedRegion()
+        captureRegionSnapshot()?.image
     }
 
     /// Snapshot editable history data, using a pre-captured raw image.
     /// Returns nil if there are no movable annotations or post-processing edits.
-    private func snapshotAnnotationData(rawImage: NSImage) -> CaptureAnnotationData? {
+    private func snapshotAnnotationData(
+        rawImage: NSImage,
+        preparedAnnotations: [Annotation]? = nil
+    ) -> CaptureAnnotationData? {
         guard let view = overlayView else { return nil }
         let annotations = view.annotations.filter { $0.isMovable }
         let editState = view.captureEditState()
         guard !annotations.isEmpty || editState.hasPostProcessing else { return nil }
 
-        let sel = view.selectionRect
-        let shifted = annotations.map { ann -> Annotation in
-            let c = ann.clone()
-            c.move(dx: -sel.origin.x, dy: -sel.origin.y)
-            return c
+        let shifted: [Annotation]
+        if let preparedAnnotations {
+            shifted = preparedAnnotations
+        } else {
+            let selectionOrigin = view.selectionRect.origin
+            shifted = annotations.map { annotation in
+                let copy = annotation.clone()
+                copy.move(dx: -selectionOrigin.x, dy: -selectionOrigin.y)
+                return copy
+            }
         }
         return CaptureAnnotationData(
             rawImage: rawImage,
-            annotations: shifted,
+            annotations: shifted.filter(\.isMovable),
             editState: editState.hasPostProcessing ? editState : nil
         )
     }
 
-    private func currentAnnotationDataForHistory() -> CaptureAnnotationData? {
+    private func reportCaptureFailure() {
+        overlayDelegate?.overlayDidFailCapture(
+            self,
+            message: L("Save failed"))
+    }
+
+    private func currentAnnotationDataForHistory(
+        rawCrossScreenImage: NSImage? = nil,
+        preparedAnnotations: [Annotation]? = nil
+    ) -> CaptureAnnotationData? {
         guard let view = overlayView else { return nil }
         let editState = view.captureEditState()
         let snapWindowImg = view.snappedWindowImage
         let hasAnnotations = view.annotations.contains(where: { $0.isMovable })
         guard hasAnnotations || editState.hasPostProcessing else { return nil }
-        let rawImage: NSImage? = (editState.beautifyIsWindowSnap && snapWindowImg != nil)
-            ? snapWindowImg : view.captureSelectedRegionRaw()
+        let usesSnappedWindow = editState.beautifyIsWindowSnap && snapWindowImg != nil
+        let rawImage: NSImage? = usesSnappedWindow
+            ? snapWindowImg
+            : rawCrossScreenImage ?? view.captureSelectedRegionRaw()
         guard let rawImage else { return nil }
-        return snapshotAnnotationData(rawImage: rawImage)
+        return snapshotAnnotationData(
+            rawImage: rawImage,
+            preparedAnnotations: usesSnappedWindow ? nil : preparedAnnotations)
     }
 
     /// Composite annotations onto the snapped window image (preserving transparency).
@@ -647,11 +723,12 @@ extension OverlayWindowController: OverlayViewDelegate {
 
         // Capture the composited image (screenshot + annotations baked in).
         // This is a single render — no double capture.
-        guard let compositedImage = captureRegion() else {
+        guard let capture = captureRegionSnapshot() else {
             dismiss()
             overlayDelegate?.overlayDidCancel(self)
             return
         }
+        let compositedImage = capture.image
 
         // Snapshot annotations + selection rect before dismiss (view will be torn down)
         let snapshotAnnotations = overlayView?.annotations ?? []
@@ -664,9 +741,12 @@ extension OverlayWindowController: OverlayViewDelegate {
         let annotationData: CaptureAnnotationData?
         if hasAnnotations || hasEffects || hasBeautify {
             let rawImage: NSImage? = (beautifyCfg.isWindowSnap && snapWindowImg != nil)
-                ? snapWindowImg : overlayView?.captureSelectedRegionRaw()
+                ? snapWindowImg
+                : capture.rawCrossScreenImage ?? overlayView?.captureSelectedRegionRaw()
             if let raw = rawImage {
-                annotationData = snapshotAnnotationData(rawImage: raw)
+                let prepared = beautifyCfg.isWindowSnap && snapWindowImg != nil
+                    ? nil : capture.preparedAnnotations
+                annotationData = snapshotAnnotationData(rawImage: raw, preparedAnnotations: prepared)
             } else {
                 annotationData = nil
             }
@@ -705,8 +785,11 @@ extension OverlayWindowController: OverlayViewDelegate {
     }
 
     func overlayViewDidRequestPin() {
-        guard var image = captureRegion() else { return }
-        let annotationData = currentAnnotationDataForHistory()
+        guard let capture = captureRegionSnapshot() else { return }
+        var image = capture.image
+        let annotationData = currentAnnotationDataForHistory(
+            rawCrossScreenImage: capture.rawCrossScreenImage,
+            preparedAnnotations: capture.preparedAnnotations)
         image = applyBeautifyIfNeeded(image) ?? image
         playCopySound()
         dismiss()
@@ -735,8 +818,11 @@ extension OverlayWindowController: OverlayViewDelegate {
 
     func overlayViewDidRequestUpload() {
         #if !OFFLINE
-        guard var image = captureRegion() else { return }
-        let annotationData = currentAnnotationDataForHistory()
+        guard let capture = captureRegionSnapshot() else { return }
+        var image = capture.image
+        let annotationData = currentAnnotationDataForHistory(
+            rawCrossScreenImage: capture.rawCrossScreenImage,
+            preparedAnnotations: capture.preparedAnnotations)
         image = applyBeautifyIfNeeded(image) ?? image
         playCopySound()
         dismiss()
@@ -751,9 +837,12 @@ extension OverlayWindowController: OverlayViewDelegate {
             return
         }
 
-        guard var image = captureRegion() else { return }
+        guard let capture = captureRegionSnapshot() else { return }
+        var image = capture.image
         image = applyBeautifyIfNeeded(image) ?? image
-        let annotationData = currentAnnotationDataForHistory()
+        let annotationData = currentAnnotationDataForHistory(
+            rawCrossScreenImage: capture.rawCrossScreenImage,
+            preparedAnnotations: capture.preparedAnnotations)
         guard let imageData = ImageEncoder.encode(image) else { return }
         let tempURL = TmpScratchDirectory.makeURL(
             filename: FilenameFormatter.defaultImageFilename(windowTitle: capturedWindowTitle))
@@ -894,10 +983,15 @@ extension OverlayWindowController: OverlayViewDelegate {
         guard let view = overlayView else { return }
         let sel = view.selectionRect
 
-        // Use stitched cross-screen image if available, otherwise crop from single screen.
-        let croppedImage: NSImage? =
-            overlayDelegate?.overlayCrossScreenImage(self)
-            ?? {
+        let croppedImage: NSImage?
+        switch overlayDelegate?.overlayCrossScreenImage(self) ?? .notSpanning {
+        case .image(let image):
+            croppedImage = image
+        case .failed:
+            reportCaptureFailure()
+            return
+        case .notSpanning:
+            croppedImage = {
                 guard let src = view.screenshotImage else { return nil }
                 // Render the crop into a concrete 8-bit bitmap now, so the editor
                 // doesn't hit a 16-bit float conversion on first draw.
@@ -924,16 +1018,14 @@ extension OverlayWindowController: OverlayViewDelegate {
                 guard let cgImage = ctx.makeImage() else { return nil }
                 return NSImage(cgImage: cgImage, size: sel.size)
             }()
+        }
         guard let image = croppedImage else { return }
 
-        // Clone annotations and shift them from overlay coords to image-relative (0,0) origin.
-        let state = view.snapshotEditorState()
-        let shiftedAnnotations = state.annotations.map { ann -> Annotation in
-            let c = ann.clone()
-            c.move(dx: -sel.origin.x, dy: -sel.origin.y)
-            return c
+        // Clone and rebase screenshot-dependent annotations against the actual crop.
+        guard let shiftedAnnotations = view.captureAnnotations(over: image) else {
+            reportCaptureFailure()
+            return
         }
-
         let tool = view.currentTool
         let color = view.currentColor
         let stroke = view.currentStrokeWidth
@@ -1032,11 +1124,12 @@ extension OverlayWindowController: OverlayViewDelegate {
         let beautifyCfg = overlayView?.beautifyConfig ?? BeautifyConfig()
         let snapWindowImg = overlayView?.snappedWindowImage
 
-        guard let compositedImage = captureRegion() else {
+        guard let capture = captureRegionSnapshot() else {
             dismiss()
             overlayDelegate?.overlayDidCancel(self)
             return
         }
+        let compositedImage = capture.image
 
         // Snapshot annotations + selection rect before dismiss
         let snapshotAnns = overlayView?.annotations ?? []
@@ -1047,9 +1140,12 @@ extension OverlayWindowController: OverlayViewDelegate {
         let annotationData: CaptureAnnotationData?
         if hasAnnotations || hasEffects || hasBeautify {
             let rawImage: NSImage? = (beautifyCfg.isWindowSnap && snapWindowImg != nil)
-                ? snapWindowImg : overlayView?.captureSelectedRegionRaw()
+                ? snapWindowImg
+                : capture.rawCrossScreenImage ?? overlayView?.captureSelectedRegionRaw()
             if let raw = rawImage {
-                annotationData = snapshotAnnotationData(rawImage: raw)
+                let prepared = beautifyCfg.isWindowSnap && snapWindowImg != nil
+                    ? nil : capture.preparedAnnotations
+                annotationData = snapshotAnnotationData(rawImage: raw, preparedAnnotations: prepared)
             } else {
                 annotationData = nil
             }
@@ -1093,12 +1189,16 @@ extension OverlayWindowController: OverlayViewDelegate {
 
     func overlayViewDidRequestFileSave() {
         let appName = resolvedAppName()
-        guard let image = captureImageForSave() else {
+        guard let capture = captureRegionSnapshot(),
+              let image = captureImageForSave(from: capture)
+        else {
             dismiss()
             overlayDelegate?.overlayDidCancel(self)
             return
         }
-        let annotationData = currentAnnotationDataForHistory()
+        let annotationData = currentAnnotationDataForHistory(
+            rawCrossScreenImage: capture.rawCrossScreenImage,
+            preparedAnnotations: capture.preparedAnnotations)
 
         dismiss()
         overlayDelegate?.overlayDidConfirm(self, capturedImage: image, annotationData: annotationData)
@@ -1148,7 +1248,7 @@ extension OverlayWindowController: OverlayViewDelegate {
         }
     }
 
-    private func captureImageForSave() -> NSImage? {
+    private func captureImageForSave(from snapshot: CaptureRegionSnapshot? = nil) -> NSImage? {
         let hasEffects = overlayView?.effectsActive ?? false
         let effectsCfg = overlayView?.effectsConfig ?? ImageEffectsConfig()
         let hasBeautify = overlayView?.beautifyEnabled ?? false
@@ -1157,7 +1257,8 @@ extension OverlayWindowController: OverlayViewDelegate {
         let snapshotAnns = overlayView?.annotations ?? []
         let snapshotSel = overlayView?.selectionRect ?? .zero
 
-        guard var image = captureRegion() else { return nil }
+        guard let snapshot = snapshot ?? captureRegionSnapshot() else { return nil }
+        var image = snapshot.image
         if hasEffects {
             image = ImageEffects.apply(to: image, config: effectsCfg)
         }
@@ -1177,6 +1278,8 @@ extension OverlayWindowController: OverlayViewDelegate {
 // MARK: - Custom Window subclass
 
 class OverlayWindow: NSPanel {
+    weak var selectionController: OverlayWindowController?
+
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }
