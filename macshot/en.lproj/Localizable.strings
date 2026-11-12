@@ -860,3 +860,8 @@
 
 "Snap webcam to corners when moved" = "Snap webcam to corners when moved";
 "Search emoji" = "Search emoji";
+"Blur background outside selection" = "Blur background outside selection";
+"Multi-Monitor Settings:" = "Multi-Monitor Settings:";
+"Span multiple monitors by default" = "Span multiple monitors by default";
+"Hold Option to span multiple monitors" = "Hold Option to span multiple monitors";
+"Hold Option to restrict to one monitor" = "Hold Option to restrict to one monitor";

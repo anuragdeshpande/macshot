@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "Lekatkan kamera web ke sudut apabila dialihkan";
 "Search emoji" = "Cari emoji";
+"Blur background outside selection" = "Kaburkan latar belakang di luar pilihan";
+"Multi-Monitor Settings:" = "Tetapan berbilang monitor:";
+"Span multiple monitors by default" = "Rentangkan merentasi beberapa monitor secara lalai";
+"Hold Option to span multiple monitors" = "Tahan kekunci Option untuk merentasi beberapa monitor";
+"Hold Option to restrict to one monitor" = "Tahan kekunci Option untuk mengehadkan kepada satu monitor";

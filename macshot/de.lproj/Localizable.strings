@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "Webcam beim Verschieben an Ecken einrasten lassen";
 "Search emoji" = "Emoji suchen";
+"Blur background outside selection" = "Hintergrund außerhalb der Auswahl weichzeichnen";
+"Multi-Monitor Settings:" = "Einstellungen für mehrere Monitore:";
+"Span multiple monitors by default" = "Standardmäßig mehrere Monitore überspannen";
+"Hold Option to span multiple monitors" = "Halte die Option-Taste gedrückt, um mehrere Monitore zu überspannen";
+"Hold Option to restrict to one monitor" = "Halte die Option-Taste gedrückt, um die Auswahl auf einen Monitor zu beschränken";

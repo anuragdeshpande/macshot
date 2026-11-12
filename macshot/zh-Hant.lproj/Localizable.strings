@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "移動時將攝影機吸附至角落";
 "Search emoji" = "搜尋表情符號";
+"Blur background outside selection" = "模糊選取範圍外的背景";
+"Multi-Monitor Settings:" = "多螢幕設定:";
+"Span multiple monitors by default" = "預設跨多個螢幕";
+"Hold Option to span multiple monitors" = "按住 Option 鍵以跨越多個螢幕";
+"Hold Option to restrict to one monitor" = "按住 Option 鍵以限制為單一螢幕";

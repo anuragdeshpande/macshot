@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "நகர்த்தும்போது வெப்கேமைக் மூலைகளில் பொருத்து";
 "Search emoji" = "எமோஜியைத் தேடு";
+"Blur background outside selection" = "தேர்வுக்கு வெளியே உள்ள பின்னணியை மங்கலாக்கு";
+"Multi-Monitor Settings:" = "பல மானிட்டர் அமைப்புகள்:";
+"Span multiple monitors by default" = "இயல்பாக பல மானிட்டர்களிலும் பரப்பவும்";
+"Hold Option to span multiple monitors" = "பல மானிட்டர்களிலும் பரவ Option விசையை அழுத்திப் பிடிக்கவும்";
+"Hold Option to restrict to one monitor" = "ஒரு மானிட்டருக்கு வரம்பிட Option விசையை அழுத்திப் பிடிக்கவும்";

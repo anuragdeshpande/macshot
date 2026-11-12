@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "הצמדת מצלמת הרשת לפינות בעת הזזה";
 "Search emoji" = "חיפוש אמוג׳י";
+"Blur background outside selection" = "טשטש את הרקע מחוץ לבחירה";
+"Multi-Monitor Settings:" = "הגדרות למספר צגים:";
+"Span multiple monitors by default" = "פריסה על פני כמה צגים כברירת מחדל";
+"Hold Option to span multiple monitors" = "כדי לפרוס על פני כמה צגים, יש להחזיק את מקש Option";
+"Hold Option to restrict to one monitor" = "כדי להגביל למסך אחד, יש להחזיק את מקש Option";

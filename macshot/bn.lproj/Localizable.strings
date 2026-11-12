@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "সরানোর সময় ওয়েবক্যামকে কোণায় আটকে দিন";
 "Search emoji" = "ইমোজি খুঁজুন";
+"Blur background outside selection" = "নির্বাচনের বাইরের পটভূমি ঝাপসা করুন";
+"Multi-Monitor Settings:" = "একাধিক মনিটরের সেটিংস:";
+"Span multiple monitors by default" = "ডিফল্টভাবে একাধিক মনিটর জুড়ে প্রসারিত করুন";
+"Hold Option to span multiple monitors" = "একাধিক মনিটর জুড়ে বিস্তৃত করতে Option কী চেপে ধরে রাখুন";
+"Hold Option to restrict to one monitor" = "একটি মনিটরে সীমাবদ্ধ রাখতে Option কী চেপে ধরে রাখুন";

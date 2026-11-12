@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "Приањање веб-камере уз углове при померању";
 "Search emoji" = "Претражи емоџије";
+"Blur background outside selection" = "Замагли позадину изван избора";
+"Multi-Monitor Settings:" = "Подешавања за више монитора:";
+"Span multiple monitors by default" = "Подразумевано обухвати више монитора";
+"Hold Option to span multiple monitors" = "Држите тастер Option да бисте обухватили више монитора";
+"Hold Option to restrict to one monitor" = "Држите тастер Option да бисте ограничили избор на један монитор";

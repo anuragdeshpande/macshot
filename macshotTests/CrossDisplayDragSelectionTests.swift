@@ -3,6 +3,180 @@ import XCTest
 
 @MainActor
 final class CrossDisplayDragSelectionTests: XCTestCase {
+    private var previousSpanDefault: Any?
+
+    override func setUp() {
+        super.setUp()
+        previousSpanDefault = UserDefaults.standard.object(
+            forKey: CrossDisplaySelectionPolicy.spanDefaultsKey)
+        // Existing capture tests assert the historical span-enabled behavior.
+        UserDefaults.standard.set(true, forKey: CrossDisplaySelectionPolicy.spanDefaultsKey)
+    }
+
+    override func tearDown() {
+        if let previous = previousSpanDefault {
+            UserDefaults.standard.set(previous, forKey: CrossDisplaySelectionPolicy.spanDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: CrossDisplaySelectionPolicy.spanDefaultsKey)
+        }
+        super.tearDown()
+    }
+
+    func testSpanDefaultAndOptionInvertCrossDisplayBehavior() {
+        withDefaults([CrossDisplaySelectionPolicy.spanDefaultsKey: nil]) {
+            XCTAssertFalse(CrossDisplaySelectionPolicy.spansByDefault())
+            XCTAssertFalse(CrossDisplaySelectionPolicy.allowsSpanning(defaultSpans: false, optionHeld: false))
+            XCTAssertTrue(CrossDisplaySelectionPolicy.allowsSpanning(defaultSpans: false, optionHeld: true))
+        }
+
+        withDefaults([CrossDisplaySelectionPolicy.spanDefaultsKey: true]) {
+            XCTAssertTrue(CrossDisplaySelectionPolicy.spansByDefault())
+            XCTAssertTrue(CrossDisplaySelectionPolicy.allowsSpanning(defaultSpans: true, optionHeld: false))
+            XCTAssertFalse(CrossDisplaySelectionPolicy.allowsSpanning(defaultSpans: true, optionHeld: true))
+        }
+    }
+
+    func testConstrainedDragPreservesAnchorAndSupportsHorizontalAndVerticalModifierChanges() {
+        let screen = NSRect(x: -400, y: -300, width: 400, height: 300)
+        let anchor = NSPoint(x: -50, y: -40)
+        let acrossRightAndTop = NSPoint(x: 25, y: 30)
+        let acrossLeftAndBottom = NSPoint(x: -450, y: -350)
+
+        let defaultRestricted = !CrossDisplaySelectionPolicy.allowsSpanning(
+            defaultSpans: false, optionHeld: false)
+        let optionSpanning = !CrossDisplaySelectionPolicy.allowsSpanning(
+            defaultSpans: false, optionHeld: true)
+        let restrictedPoint = CrossDisplaySelectionPolicy.constrainedPoint(
+            acrossRightAndTop, to: screen, enabled: defaultRestricted)
+        let restrictedRect = CrossDisplaySelectionPolicy.selectionRect(
+            from: anchor, to: restrictedPoint,
+            width: abs(restrictedPoint.x - anchor.x),
+            height: abs(restrictedPoint.y - anchor.y))
+        let spanningPoint = CrossDisplaySelectionPolicy.constrainedPoint(
+            acrossRightAndTop, to: screen, enabled: optionSpanning)
+        let spanningRect = CrossDisplaySelectionPolicy.selectionRect(
+            from: anchor, to: spanningPoint,
+            width: abs(spanningPoint.x - anchor.x),
+            height: abs(spanningPoint.y - anchor.y))
+        XCTAssertEqual(restrictedPoint, NSPoint(x: 0, y: 0))
+        XCTAssertEqual(restrictedRect.minX, anchor.x)
+        XCTAssertEqual(restrictedRect.minY, anchor.y)
+        XCTAssertEqual(spanningRect.minX, anchor.x)
+        XCTAssertEqual(spanningRect.minY, anchor.y)
+        XCTAssertGreaterThan(spanningRect.width, restrictedRect.width)
+        XCTAssertGreaterThan(spanningRect.height, restrictedRect.height)
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedPoint(
+                acrossRightAndTop, to: screen, enabled: defaultRestricted),
+            restrictedPoint,
+            "releasing Option during the same drag must retain the original anchor")
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedPoint(
+                acrossLeftAndBottom, to: screen, enabled: defaultRestricted),
+            NSPoint(x: -400, y: -300))
+
+        let defaultSpanning = CrossDisplaySelectionPolicy.allowsSpanning(
+            defaultSpans: true, optionHeld: false)
+        let optionRestricted = !CrossDisplaySelectionPolicy.allowsSpanning(
+            defaultSpans: true, optionHeld: true)
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedPoint(
+                acrossLeftAndBottom, to: screen, enabled: !defaultSpanning),
+            acrossLeftAndBottom)
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedPoint(
+                acrossLeftAndBottom, to: screen, enabled: optionRestricted),
+            NSPoint(x: -400, y: -300))
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedPoint(
+                acrossLeftAndBottom, to: screen, enabled: !defaultSpanning),
+            acrossLeftAndBottom,
+            "releasing Option must resume the configured spanning mode")
+    }
+
+    func testConstrainedMoveAndOptionBoundarySnapBypass() {
+        let screen = NSRect(x: -400, y: -300, width: 400, height: 300)
+        let moved = NSRect(x: -25, y: 20, width: 100, height: 80)
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedMove(moved, to: screen, enabled: true),
+            NSRect(x: -100, y: -80, width: 100, height: 80))
+        XCTAssertEqual(
+            CrossDisplaySelectionPolicy.constrainedMove(moved, to: screen, enabled: false),
+            moved)
+        XCTAssertTrue(CrossDisplaySelectionPolicy.shouldApplyBoundarySnap(
+            enabled: true, optionHeld: false))
+        XCTAssertFalse(CrossDisplaySelectionPolicy.shouldApplyBoundarySnap(
+            enabled: true, optionHeld: true))
+    }
+
+    func testActiveSelectionReappliesOptionChangesAndMouseUpModifiers() throws {
+        try withDefaults([CrossDisplaySelectionPolicy.spanDefaultsKey: false]) {
+            let controller = OverlayWindowController(screen: try mainScreenOrSkip())
+            let window = try XCTUnwrap(NSApp.window(withWindowNumber: Int(controller.windowNumber)))
+            let view = try XCTUnwrap(overlayView(in: controller))
+            window.setFrame(NSRect(x: 0, y: 0, width: 400, height: 300), display: false)
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(view)
+            defer { controller.dismiss() }
+
+            let anchor = NSPoint(x: 350, y: 250)
+            let rawPoint = NSPoint(x: 450, y: 350)
+            view.mouseDown(with: mouseEvent(.leftMouseDown, at: anchor, in: window))
+            view.mouseDragged(with: mouseEvent(.leftMouseDragged, at: rawPoint, in: window))
+            let restricted = NSRect(x: 350, y: 250, width: 50, height: 50)
+            let spanning = NSRect(x: 350, y: 250, width: 100, height: 100)
+            XCTAssertEqual(controller.selectionRect, restricted)
+
+            view.flagsChanged(with: flagsChangedEvent(.option, in: window))
+            XCTAssertEqual(controller.selectionRect, spanning)
+            view.flagsChanged(with: flagsChangedEvent([], in: window))
+            XCTAssertEqual(controller.selectionRect, restricted)
+
+            view.mouseUp(with: mouseEvent(
+                .leftMouseUp, at: rawPoint, in: window, modifierFlags: .option))
+            XCTAssertEqual(controller.selectionRect, spanning)
+
+            view.flagsChanged(with: flagsChangedEvent([], in: window))
+            XCTAssertEqual(
+                controller.selectionRect,
+                spanning,
+                "modifier changes after mouse-up must not alter a completed selection")
+
+            view.clearSelection()
+            view.rightMouseDown(with: mouseEvent(.rightMouseDown, at: anchor, in: window))
+            view.mouseMoved(with: mouseEvent(.mouseMoved, at: rawPoint, in: window))
+            XCTAssertEqual(controller.selectionRect, restricted)
+            view.flagsChanged(with: flagsChangedEvent(.option, in: window))
+            XCTAssertEqual(controller.selectionRect, spanning)
+        }
+    }
+
+    func testSpanningByDefaultCanBeTemporarilyRestrictedWithOption() throws {
+        try withDefaults([CrossDisplaySelectionPolicy.spanDefaultsKey: true]) {
+            let controller = OverlayWindowController(screen: try mainScreenOrSkip())
+            let window = try XCTUnwrap(NSApp.window(withWindowNumber: Int(controller.windowNumber)))
+            let view = try XCTUnwrap(overlayView(in: controller))
+            window.setFrame(NSRect(x: 0, y: 0, width: 400, height: 300), display: false)
+            window.makeKeyAndOrderFront(nil)
+            window.makeFirstResponder(view)
+            defer { controller.dismiss() }
+
+            let anchor = NSPoint(x: 350, y: 250)
+            let end = NSPoint(x: 450, y: 350)
+            let spanning = NSRect(x: 350, y: 250, width: 100, height: 100)
+            let restricted = NSRect(x: 350, y: 250, width: 50, height: 50)
+            view.mouseDown(with: mouseEvent(.leftMouseDown, at: anchor, in: window))
+            view.mouseDragged(with: mouseEvent(.leftMouseDragged, at: end, in: window))
+            XCTAssertEqual(controller.selectionRect, spanning)
+            view.flagsChanged(with: flagsChangedEvent(.option, in: window))
+            XCTAssertEqual(controller.selectionRect, restricted)
+            view.flagsChanged(with: flagsChangedEvent([], in: window))
+            XCTAssertEqual(controller.selectionRect, spanning)
+            view.mouseUp(with: mouseEvent(.leftMouseUp, at: end, in: window))
+            XCTAssertEqual(controller.selectionRect, spanning)
+        }
+    }
+
     func testInitialDragUsesActualEventsAcrossDisplayArrangements() throws {
         _ = try mainScreenOrSkip()
         let cases: [(NSRect, NSRect, NSPoint, NSPoint, NSRect)] = [
@@ -137,6 +311,44 @@ final class CrossDisplayDragSelectionTests: XCTestCase {
             release,
             mouseLocationOnScreen: NSPoint(x: 450, y: 160)))
         XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 160, width: 100, height: 90))
+    }
+
+    func testCrossDisplayDragEscapesAStrongSnappingEdge() throws {
+        try withDefaults(["boundarySnapEnabled": true]) {
+            let controller = OverlayWindowController(screen: try mainScreenOrSkip())
+            let window = try XCTUnwrap(NSApp.window(withWindowNumber: Int(controller.windowNumber)))
+            let view = try XCTUnwrap(overlayView(in: controller))
+            window.setFrame(NSRect(x: 0, y: 0, width: 400, height: 300), display: false)
+            window.makeKeyAndOrderFront(nil)
+            defer { controller.dismiss() }
+
+            let image = ImageProbe.makeImage(width: 400, height: 300) { context in
+                context.setFillColor(CGColor(gray: 1, alpha: 1))
+                context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+                context.setFillColor(CGColor(gray: 0, alpha: 1))
+                context.fill(CGRect(x: 399, y: 0, width: 1, height: 300))
+            }
+            controller.setScreenshot(try XCTUnwrap(cgImage(from: image)))
+            view.mouseDown(with: mouseEvent(.leftMouseDown, at: NSPoint(x: 350, y: 250), in: window))
+
+            let nearEdge = mouseEvent(.leftMouseDragged, at: NSPoint(x: 398, y: 160), in: window)
+            let deadline = Date(timeIntervalSinceNow: 3)
+            repeat {
+                view.mouseDragged(with: nearEdge)
+                if controller.selectionRect.maxX == 399 { break }
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
+            } while Date() < deadline
+            XCTAssertEqual(controller.selectionRect.maxX, 399, "the image edge must be indexed and snappable")
+
+            XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+                nearEdge, mouseLocationOnScreen: NSPoint(x: 450, y: 160)))
+            XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 160, width: 100, height: 90),
+                           "the selection must follow the pointer beyond the snap radius")
+            let release = mouseEvent(.leftMouseUp, at: NSPoint(x: 399, y: 160), in: window)
+            XCTAssertTrue(controller.forwardCrossDisplaySelectionEvent(
+                release, mouseLocationOnScreen: NSPoint(x: 450, y: 160)))
+            XCTAssertEqual(controller.selectionRect, NSRect(x: 350, y: 160, width: 100, height: 90))
+        }
     }
 
     func testSameWindowDragCrossesLeftFromNegativeDisplayOrigin() throws {
@@ -978,16 +1190,38 @@ final class CrossDisplayDragSelectionTests: XCTestCase {
         return target.selectionRect
     }
 
-    private func mouseEvent(_ type: NSEvent.EventType, at point: NSPoint, in window: NSWindow) -> NSEvent {
+    private func mouseEvent(
+        _ type: NSEvent.EventType,
+        at point: NSPoint,
+        in window: NSWindow,
+        modifierFlags: NSEvent.ModifierFlags = []
+    ) -> NSEvent {
         NSEvent.mouseEvent(
             with: type,
             location: point,
-            modifierFlags: [],
+            modifierFlags: modifierFlags,
             timestamp: ProcessInfo.processInfo.systemUptime,
             windowNumber: window.windowNumber,
             context: nil,
             eventNumber: 1,
             clickCount: 1,
             pressure: 1)!
+    }
+
+    private func flagsChangedEvent(
+        _ modifierFlags: NSEvent.ModifierFlags,
+        in window: NSWindow
+    ) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .flagsChanged,
+            location: .zero,
+            modifierFlags: modifierFlags,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "",
+            charactersIgnoringModifiers: "",
+            isARepeat: false,
+            keyCode: 58)!
     }
 }

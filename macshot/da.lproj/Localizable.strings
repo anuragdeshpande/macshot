@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Fastgør webkameraet til hjørnerne, når det flyttes";
 "Search emoji" = "Søg efter emoji";
+"Blur background outside selection" = "Slør baggrunden uden for markeringen";
+"Multi-Monitor Settings:" = "Indstillinger for flere skærme:";
+"Span multiple monitors by default" = "Spænd over flere skærme som standard";
+"Hold Option to span multiple monitors" = "Hold Option-tasten nede for at spænde over flere skærme";
+"Hold Option to restrict to one monitor" = "Hold Option-tasten nede for at begrænse valget til én skærm";

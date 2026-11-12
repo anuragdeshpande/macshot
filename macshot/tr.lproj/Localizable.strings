@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "Taşırken web kamerasını köşelere yasla";
 "Search emoji" = "Emoji ara";
+"Blur background outside selection" = "Seçimin dışındaki arka planı bulanıklaştır";
+"Multi-Monitor Settings:" = "Çoklu monitör ayarları:";
+"Span multiple monitors by default" = "Varsayılan olarak birden fazla monitöre yay";
+"Hold Option to span multiple monitors" = "Birden fazla monitöre yaymak için Option tuşunu basılı tutun";
+"Hold Option to restrict to one monitor" = "Tek bir monitörle sınırlamak için Option tuşunu basılı tutun";

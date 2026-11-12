@@ -89,6 +89,51 @@ struct OverlayEditorState {
     var effectsSharpness: Float
 }
 
+enum CrossDisplaySelectionPolicy {
+    static let spanDefaultsKey = "spanMultipleMonitorsByDefault"
+
+    static func spansByDefault(in defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: spanDefaultsKey) as? Bool ?? false
+    }
+
+    static func allowsSpanning(defaultSpans: Bool, optionHeld: Bool) -> Bool {
+        defaultSpans != optionHeld
+    }
+
+    static func constrainedPoint(_ point: NSPoint, to bounds: NSRect, enabled: Bool) -> NSPoint {
+        guard enabled else { return point }
+        return NSPoint(
+            x: min(max(point.x, bounds.minX), bounds.maxX),
+            y: min(max(point.y, bounds.minY), bounds.maxY))
+    }
+
+    static func constrainedMove(_ rect: NSRect, to bounds: NSRect, enabled: Bool) -> NSRect {
+        guard enabled else { return rect }
+        let maxX = max(bounds.minX, bounds.maxX - rect.width)
+        let maxY = max(bounds.minY, bounds.maxY - rect.height)
+        let x = min(max(rect.minX, bounds.minX), maxX)
+        let y = min(max(rect.minY, bounds.minY), maxY)
+        return rect.offsetBy(dx: x - rect.minX, dy: y - rect.minY)
+    }
+
+    static func selectionRect(
+        from anchor: NSPoint,
+        to point: NSPoint,
+        width: CGFloat,
+        height: CGFloat
+    ) -> NSRect {
+        NSRect(
+            x: anchor.x < point.x ? anchor.x : anchor.x - width,
+            y: anchor.y < point.y ? anchor.y : anchor.y - height,
+            width: width,
+            height: height)
+    }
+
+    static func shouldApplyBoundarySnap(enabled: Bool, optionHeld: Bool) -> Bool {
+        enabled && !optionHeld
+    }
+}
+
 class OverlayView: NSView {
 
     // MARK: - Properties
@@ -177,10 +222,13 @@ class OverlayView: NSView {
     var remoteSelectionRect: NSRect = .zero
     /// The full (unclipped) remote selection in this view's local coords — used for resize anchor calculation.
     var remoteSelectionFullRect: NSRect = .zero
+    /// Origin display bounds in this view's coordinates while resizing a remote selection.
+    var remoteSelectionOriginBounds: NSRect?
     private var isResizingRemoteSelection: Bool = false
     private var remoteResizeHandle: ResizeHandle = .none
     private var remoteResizeAnchor: NSPoint = .zero  // the fixed corner during remote resize
     private var selectionStart: NSPoint = .zero
+    private var lastRawSelectionPoint: NSPoint?
     /// Trackpad/mouse QoL: when the user right-clicks in the empty overlay
     /// (state == .idle), we anchor a selection at that point and let the
     /// cursor resize it with no button held. A subsequent left-click
@@ -759,6 +807,7 @@ class OverlayView: NSView {
         return viewToCanvas(convert(windowPoint, from: nil))
     }
     private var editorTooltipView: NSView?
+    private let captureRailTooltip = CaptureRailTooltip()
     private var overlayErrorTimer: Timer? = nil
 
     // Recording state
@@ -999,6 +1048,39 @@ class OverlayView: NSView {
             UserDefaults.standard.set(newValue.rawValue, forKey: "captureSnapMode")
             UserDefaults.standard.set(newValue != .off, forKey: "windowSnapEnabled")
         }
+    }
+
+    private var spanMultipleMonitorsByDefault: Bool {
+        CrossDisplaySelectionPolicy.spansByDefault()
+    }
+
+    private func selectionCanSpan(modifiers: NSEvent.ModifierFlags) -> Bool {
+        CrossDisplaySelectionPolicy.allowsSpanning(
+            defaultSpans: spanMultipleMonitorsByDefault,
+            optionHeld: modifiers.contains(.option))
+    }
+
+    private func selectionBounds(for modifiers: NSEvent.ModifierFlags) -> NSRect {
+        guard !isEditorMode else { return bounds }
+        return selectionCanSpan(modifiers: modifiers) ? selectionBoundsInView : bounds
+    }
+
+    private func selectionPoint(
+        _ point: NSPoint,
+        modifiers: NSEvent.ModifierFlags,
+        originBounds: NSRect? = nil
+    ) -> NSPoint {
+        guard !isEditorMode, !selectionCanSpan(modifiers: modifiers) else { return point }
+        return CrossDisplaySelectionPolicy.constrainedPoint(
+            point, to: originBounds ?? bounds, enabled: true)
+    }
+
+    private func constrainedMovedSelection(
+        _ rect: NSRect,
+        modifiers: NSEvent.ModifierFlags
+    ) -> NSRect {
+        guard !isEditorMode, !selectionCanSpan(modifiers: modifiers) else { return rect }
+        return CrossDisplaySelectionPolicy.constrainedMove(rect, to: bounds, enabled: true)
     }
 
     // Boundary snapping — snap the selection's dragged edges to strong color
@@ -1457,6 +1539,7 @@ class OverlayView: NSView {
     private func showToolOptionsPopover(for tool: AnnotationTool, anchoredTo button: ToolbarButtonView) {
         dismissAnnotationHoverPopover()
         dismissToolOptionsPopover()
+        captureRailTooltip.hide()
 
         let controller = ToolOptionsPopoverController(
             overlayView: self, tool: tool, title: button.tooltipText)
@@ -1744,13 +1827,16 @@ class OverlayView: NSView {
         // here would compare coordinates in different spaces and cause false matches.
         if !isEditorMode {
             let localPoint = convert(point, from: superview)
-            if let strip = bottomStripView, !strip.isHidden, bottomBarRect.contains(localPoint) {
+            if let strip = bottomStripView, strip.window === window,
+               !strip.isHidden, bottomBarRect.contains(localPoint) {
                 return strip.hitTest(convert(point, to: strip.superview))
             }
-            if let strip = rightStripView, !strip.isHidden, rightBarRect.contains(localPoint) {
+            if let strip = rightStripView, strip.window === window,
+               !strip.isHidden, rightBarRect.contains(localPoint) {
                 return strip.hitTest(convert(point, to: strip.superview))
             }
-            if let row = toolOptionsRowView, !row.isHidden, optionsRowRect.width > 1, optionsRowRect.contains(localPoint) {
+            if let row = toolOptionsRowView, row.window === window,
+               !row.isHidden, optionsRowRect.width > 1, optionsRowRect.contains(localPoint) {
                 return row.hitTest(convert(point, to: row.superview))
             }
             if let box = resolutionBox, !box.isHidden, resolutionBoxRect.width > 1, resolutionBoxRect.contains(localPoint) {
@@ -1964,12 +2050,14 @@ class OverlayView: NSView {
 
                         NSGraphicsContext.saveGraphicsState()
                         outsideSelection.addClip()
-                        if let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+                        let showsOutsideBlur = LiquidGlass.showsOutsideBlur
+                        if showsOutsideBlur,
+                           let source = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
                            let blurred = outsideSelectionBlur.image(for: source) {
                             NSImage(cgImage: blurred, size: image.size)
                                 .draw(in: bounds, from: .zero, operation: .copy, fraction: 1)
                         }
-                        NSColor.black.withAlphaComponent(0.36).setFill()
+                        NSColor.black.withAlphaComponent(showsOutsideBlur ? 0.36 : 0.45).setFill()
                         NSBezierPath(rect: bounds).fill()
                         NSGraphicsContext.restoreGraphicsState()
                     } else {
@@ -2560,6 +2648,9 @@ class OverlayView: NSView {
         }
         let line3prefix = L("Snap mode: ")
         let line3suffix = L("  (Tab to switch)")
+        let spanHint = spanMultipleMonitorsByDefault
+            ? L("Hold Option to restrict to one monitor")
+            : L("Hold Option to span multiple monitors")
 
         let snapColor = snapMode == .off ? NSColor.systemOrange : NSColor.systemGreen
 
@@ -2581,6 +2672,7 @@ class OverlayView: NSView {
         let size2total = CGSize(
             width: size2pre.width + size2state.width + size2suf.width,
             height: max(size2pre.height, size2state.height, size2suf.height))
+        let size3 = (spanHint as NSString).size(withAttributes: attrs2prefix)
 
         let lineSpacing: CGFloat = 6
         let padding: CGFloat = 14
@@ -2588,11 +2680,15 @@ class OverlayView: NSView {
         let buttonGap: CGFloat = 10
         let showPresetButton = shouldShowPreSelectionPresetButton
         let buttonBlockHeight = showPresetButton ? buttonSize.height + buttonGap : 0
-        let totalTextHeight = size1.height + lineSpacing + size2total.height + buttonBlockHeight
-        let bgWidth = max(size1.width, size2total.width, showPresetButton ? buttonSize.width : 0) + padding * 2
+        let totalTextHeight =
+            size1.height + lineSpacing + size3.height + lineSpacing + size2total.height
+            + buttonBlockHeight
+        let bgWidth =
+            max(size1.width, size2total.width, size3.width, showPresetButton ? buttonSize.width : 0)
+            + padding * 2
         let bgHeight = totalTextHeight + padding * 2
 
-        let bgX = bounds.midX - bgWidth / 2
+        let bgX = max(bounds.minX + 4, min(bounds.midX - bgWidth / 2, bounds.maxX - bgWidth - 4))
         let bgY = bounds.midY - bgHeight / 2
         let bgRect = NSRect(x: bgX, y: bgY, width: bgWidth, height: bgHeight)
 
@@ -2611,10 +2707,13 @@ class OverlayView: NSView {
         }
 
         let textY2 = bgY + padding + buttonBlockHeight
-        let textY1 = textY2 + size2total.height + lineSpacing
+        let textY3 = textY2 + size2total.height + lineSpacing
+        let textY1 = textY3 + size3.height + lineSpacing
 
         (line1 as NSString).draw(
             at: NSPoint(x: bounds.midX - size1.width / 2, y: textY1), withAttributes: attrs1)
+        (spanHint as NSString).draw(
+            at: NSPoint(x: bounds.midX - size3.width / 2, y: textY3), withAttributes: attrs2prefix)
 
         // Draw snap line as three segments with different colors
         let line2startX = bounds.midX - size2total.width / 2
@@ -2742,9 +2841,9 @@ class OverlayView: NSView {
     /// NSScreen. The remaining top band is the camera housing area; keep small
     /// floating chrome out of that rect while still allowing it in the safe side
     /// areas on MacBooks with a notch.
-    private func screenTopObstructionRects() -> [NSRect] {
+    private func screenTopObstructionRects(for targetScreen: NSScreen? = nil) -> [NSRect] {
         guard #available(macOS 12.0, *),
-              let screen = window?.screen,
+              let screen = targetScreen ?? window?.screen,
               screen.safeAreaInsets.top > 0 else { return [] }
 
         let topBandScreen = NSRect(
@@ -3312,7 +3411,7 @@ class OverlayView: NSView {
         var newH = CGFloat(pxH) / scale
 
         // Clamp to the available overlay bounds, preserving aspect so presets don't distort.
-        let canvasBounds = selectionBoundsInView
+        let canvasBounds = selectionBounds(for: NSEvent.modifierFlags)
         let maxW = canvasBounds.width
         let maxH = canvasBounds.height
         var fits = true
@@ -3361,7 +3460,7 @@ class OverlayView: NSView {
             return
         }
         // Reshape to the locked ratio, keeping area roughly similar, centered.
-        let canvasBounds = selectionBoundsInView
+        let canvasBounds = selectionBounds(for: NSEvent.modifierFlags)
         let cur = selectionRect
         var w = cur.width
         var h = w / aspect
@@ -5405,6 +5504,7 @@ class OverlayView: NSView {
         // Clear tooltip before rebuilding — old button views are about to be destroyed
         hoveredTooltip = nil
         hoveredTooltipButtonView = nil
+        captureRailTooltip.hide()
 
         let movableAnnotations = annotations.contains { $0.isMovable }
         var allBottomButtons = ToolbarLayout.bottomButtons(
@@ -5579,25 +5679,31 @@ class OverlayView: NSView {
 
         let bottomSize = bottomStrip.frame.size
 
-        var captureRailFrames: ToolbarRailFrames?
         if isEditorMode {
             let cb = chromeParentView?.bounds ?? bounds
-            bottomStrip.frame.origin = NSPoint(x: cb.midX - bottomSize.width / 2, y: 20)
+            bottomBarRect = NSRect(
+                origin: NSPoint(x: cb.midX - bottomSize.width / 2, y: 20), size: bottomSize)
             bottomStrip.autoresizingMask = [.minXMargin, .maxXMargin, .maxYMargin]
-            rightStrip.frame.origin = NSPoint(
-                x: cb.maxX - rightSize.width - 20, y: cb.maxY - rightSize.height - 36)
+            rightBarRect = NSRect(
+                origin: NSPoint(x: cb.maxX - rightSize.width - 20, y: cb.maxY - rightSize.height - 36),
+                size: rightSize)
             rightStrip.autoresizingMask = [.minXMargin, .minYMargin]
         } else {
             let optionsSize = toolOptionsRowView?.isHidden == false
                 ? toolOptionsRowView?.frame.size ?? .zero
                 : .zero
-            var rails = ToolbarRailFrames.place(
+            let screens = window == nil ? [] : NSScreen.screens
+            let screenBounds = screens.map { overlayRect(fromScreenRect: $0.frame) }
+            let rails = ToolbarRailFrames.place(
                 around: anchorRect,
-                inside: bounds,
+                on: screenBounds.isEmpty ? [bounds] : screenBounds,
                 annotationSize: bottomSize,
                 optionsSize: optionsSize,
                 actionSize: rightSize)
             var actionFrame = rails.actions
+            let actionScreenIndex = screenBounds.firstIndex { $0.contains(NSPoint(x: actionFrame.midX, y: actionFrame.midY)) }
+            let actionBounds = actionScreenIndex.map { screenBounds[$0] } ?? bounds
+            let actionScreen = actionScreenIndex.map { screens[$0] }
 
             if shouldShowResolutionBox(), resolutionBoxRect.width > 1, resolutionBoxRect.height > 1 {
                 let avoidRect = resolutionBoxRect.insetBy(dx: -6, dy: -6)
@@ -5609,54 +5715,39 @@ class OverlayView: NSView {
                         NSRect(x: actionFrame.minX, y: avoidRect.minY - actionFrame.height - 6, width: actionFrame.width, height: actionFrame.height),
                     ]
                     if let clearFrame = candidates.first(where: {
-                        bounds.insetBy(dx: 4, dy: 4).contains($0) && !$0.intersects(avoidRect)
+                        actionBounds.insetBy(dx: 4, dy: 4).contains($0) && !$0.intersects(avoidRect)
                     }) {
                         actionFrame = clearFrame
                     }
                 }
             }
 
-            let topObstructions = screenTopObstructionRects().map { $0.insetBy(dx: -4, dy: -2) }
+            let topObstructions = screenTopObstructionRects(for: actionScreen).map { $0.insetBy(dx: -4, dy: -2) }
             for obstruction in topObstructions {
                 if actionFrame.intersects(obstruction) {
                     actionFrame.origin.y = obstruction.minY - actionFrame.height - 2
                 }
             }
             actionFrame.origin.y = max(
-                bounds.minY + 4,
-                min(actionFrame.minY, bounds.maxY - actionFrame.height - 4))
+                actionBounds.minY + 4,
+                min(actionFrame.minY, actionBounds.maxY - actionFrame.height - 4))
 
-            rails = ToolbarRailFrames(
-                annotations: rails.annotations,
-                options: rails.options,
-                actions: actionFrame)
-            captureRailFrames = rails
-            bottomStrip.frame.origin = rails.annotations.origin
-            rightStrip.frame.origin = rails.actions.origin
+            bottomBarRect = rails.annotations
+            rightBarRect = actionFrame
+            optionsRowRect = rails.options
         }
-
-        // bottomBarRect is the intended OVERLAY-space rect. Build it from the
-        // strip's size + the origin we just set (rather than reading back the
-        // live frame, which is panel-local when the strip is glass-panel-hosted).
-        bottomBarRect = NSRect(origin: bottomStrip.frame.origin, size: bottomStrip.frame.size)
-        rightBarRect = NSRect(origin: rightStrip.frame.origin, size: rightStrip.frame.size)
 
         // Keep editor options below the horizontal bar and capture options outside the left rail.
         if let row = toolOptionsRowView, !row.isHidden {
             if isEditorMode {
                 let rowW = max(bottomBarRect.width, row.contentWidth)
-                row.frame.size.width = rowW
                 // In editor mode, center the options row the same way as the bottom bar
                 let cb = chromeParentView?.bounds ?? bounds
                 let rowX = max(4, cb.midX - rowW / 2)
-                row.frame.origin = NSPoint(x: rowX, y: bottomBarRect.maxY + 2)
+                optionsRowRect = NSRect(x: rowX, y: bottomBarRect.maxY + 2,
+                                        width: rowW, height: row.frame.height)
                 row.autoresizingMask = [.minXMargin, .maxXMargin, .maxYMargin]
-            } else {
-                row.frame = captureRailFrames?.options ?? .zero
             }
-            // Capture the intended overlay-space rect before the row is lifted
-            // into a glass panel (where its live frame becomes panel-local).
-            optionsRowRect = NSRect(origin: row.frame.origin, size: row.frame.size)
         } else {
             optionsRowRect = .zero
         }
@@ -5664,9 +5755,8 @@ class OverlayView: NSView {
         syncGlassChromePanels()
     }
 
-    /// Liquid Glass: lift each toolbar surface (bottom strip, right strip, tool
-    /// options row) into a floating child panel above the overlay window (or an
-    /// inline glass host in editor mode), positioned at its intended rect.
+    /// Host rails beyond the overlay window in floating child panels; keep other
+    /// chrome inline, including all editor toolbars.
     private func syncGlassChromePanels() {
         let glass = LiquidGlass.isEnabled
         let inlineParent = isEditorMode ? chromeParentView : nil
@@ -5674,19 +5764,22 @@ class OverlayView: NSView {
             bottomChrome.present(s, overlayRect: bottomBarRect,
                                  visible: !s.isHidden, glass: glass, in: self,
                                  inlineHostParent: inlineParent,
-                                 cornerRadius: s.usesSegmentedChrome ? s.chromeCornerRadius : nil)
+                                 cornerRadius: s.usesSegmentedChrome ? s.chromeCornerRadius : nil,
+                                 floating: !isEditorMode && !bounds.contains(bottomBarRect))
         }
         if let s = rightStripView {
             rightChrome.present(s, overlayRect: rightBarRect,
                                 visible: !s.isHidden, glass: glass, in: self,
                                 inlineHostParent: inlineParent,
-                                cornerRadius: s.usesSegmentedChrome ? s.chromeCornerRadius : nil)
+                                cornerRadius: s.usesSegmentedChrome ? s.chromeCornerRadius : nil,
+                                floating: !isEditorMode && !bounds.contains(rightBarRect))
         }
         if let row = toolOptionsRowView {
             optionsChrome.present(row, overlayRect: optionsRowRect,
                                   visible: !row.isHidden, glass: glass, in: self,
                                   inlineHostParent: inlineParent,
-                                  cornerRadius: row.orientation == .vertical ? row.chromeCornerRadius : nil)
+                                  cornerRadius: row.orientation == .vertical ? row.chromeCornerRadius : nil,
+                                  floating: !isEditorMode && !bounds.contains(optionsRowRect))
         }
         // Note: the resolution box's glass panel is owned by updateResolutionBox(),
         // not synced here, so editing it is never disturbed by draw-driven
@@ -5696,6 +5789,7 @@ class OverlayView: NSView {
     /// Tear down all glass chrome hosts, returning their views to the overlay.
     private func teardownGlassChromePanels() {
         let targetParent = chromeParentView ?? self
+        captureRailTooltip.teardown()
         bottomChrome.reclaim(bottomStripView, to: targetParent)
         rightChrome.reclaim(rightStripView, to: targetParent)
         optionsChrome.reclaim(toolOptionsRowView, to: targetParent)
@@ -6016,6 +6110,7 @@ class OverlayView: NSView {
             }
             // Always start a drag — snap is resolved in mouseUp if no real drag occurred
             selectionStart = point
+            lastRawSelectionPoint = point
             selectionRect = NSRect(origin: point, size: .zero)
             state = .selecting
             overlayDelegate?.overlayViewDidBeginSelection()
@@ -6116,11 +6211,13 @@ class OverlayView: NSView {
 
         // Remote selection resize (cross-screen)
         if isResizingRemoteSelection {
+            let resizePoint = selectionPoint(
+                point, modifiers: event.modifierFlags, originBounds: remoteSelectionOriginBounds)
             let anchor = remoteResizeAnchor
             let fullRect = remoteSelectionFullRect
             var newRect = NSRect(
-                x: min(anchor.x, point.x), y: min(anchor.y, point.y),
-                width: abs(point.x - anchor.x), height: abs(point.y - anchor.y))
+                x: min(anchor.x, resizePoint.x), y: min(anchor.y, resizePoint.y),
+                width: abs(resizePoint.x - anchor.x), height: abs(resizePoint.y - anchor.y))
             // For edge handles, preserve the dimension that shouldn't change
             switch remoteResizeHandle {
             case .top, .bottom:
@@ -6697,7 +6794,9 @@ class OverlayView: NSView {
             } else if isDraggingSelection {
                 var moved = selectionRect
                 moved.origin = NSPoint(x: point.x - dragOffset.x, y: point.y - dragOffset.y)
-                selectionRect = boundarySnappedMovedRect(moved, modifiers: event.modifierFlags)
+                selectionRect = constrainedMovedSelection(
+                    boundarySnappedMovedRect(moved, modifiers: event.modifierFlags),
+                    modifiers: event.modifierFlags)
                 overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
                 updateResolutionBox()
                 repositionToolbars()
@@ -6709,7 +6808,9 @@ class OverlayView: NSView {
                     var moved = selectionRect
                     moved.origin.x += dx
                     moved.origin.y += dy
-                    selectionRect = boundarySnappedMovedRect(moved, modifiers: event.modifierFlags)
+                    selectionRect = constrainedMovedSelection(
+                        boundarySnappedMovedRect(moved, modifiers: event.modifierFlags),
+                        modifiers: event.modifierFlags)
                     spaceRepositionLast = point
                 } else {
                     resizeSelection(to: point, modifiers: event.modifierFlags)
@@ -6761,6 +6862,13 @@ class OverlayView: NSView {
             return
         }
         spaceRepositioning = false
+
+        if state == .selecting, let point = lastRawSelectionPoint {
+            updateSelectionRect(
+                to: point,
+                shiftHeld: event.modifierFlags.contains(.shift),
+                modifiers: event.modifierFlags)
+        }
 
         // Any drag that used boundary snap is ending — clear its guide lines.
         boundarySnapGuideX = nil
@@ -7029,6 +7137,7 @@ class OverlayView: NSView {
     }
 
     private func finishSelection() {
+        lastRawSelectionPoint = nil
         let opensEditor = UserDefaults.standard.bool(forKey: "openEditorAfterSelection")
             && !autoEnterRecordingMode && !autoOCRMode && !autoTranslateOverlayMode
             && !autoQuickSaveMode && !autoScrollCaptureMode && !autoConfirmMode
@@ -7172,7 +7281,8 @@ class OverlayView: NSView {
     /// identical geometry.
     private func updateSelectionRect(to point: NSPoint, shiftHeld: Bool,
                                      modifiers: NSEvent.ModifierFlags = []) {
-        var point = point
+        lastRawSelectionPoint = point
+        var point = selectionPoint(point, modifiers: modifiers)
         if spaceRepositioning {
             let dx = point.x - spaceRepositionLast.x
             let dy = point.y - spaceRepositionLast.y
@@ -7182,7 +7292,9 @@ class OverlayView: NSView {
         }
 
         if case .resolution(let pxW, let pxH) = activePreSelectionPreset {
-            selectionRect = fixedPreSelectionRect(centeredAt: point, pxW: pxW, pxH: pxH)
+            selectionRect = fixedPreSelectionRect(
+                centeredAt: point, pxW: pxW, pxH: pxH,
+                within: selectionBounds(for: modifiers))
             overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
             needsDisplay = true
             return
@@ -7193,7 +7305,10 @@ class OverlayView: NSView {
         // stays exact, and bypassed with Option. The anchor edge stays put.
         // While repositioning with Space the whole rect translates rigidly, so we
         // snap the WHOLE moved rect below instead of just the cursor corner.
-        if !spaceRepositioning, boundarySnapEnabled, !modifiers.contains(.option), let index = boundarySnapIndex,
+        if !spaceRepositioning,
+           CrossDisplaySelectionPolicy.shouldApplyBoundarySnap(
+               enabled: boundarySnapEnabled, optionHeld: modifiers.contains(.option)),
+           let index = boundarySnapIndex,
            activePreSelectionRatio == nil, !shiftHeld {
             point = snapMovingPoint(point, anchor: selectionStart, index: index)
         } else if !spaceRepositioning, boundarySnapGuideX != nil || boundarySnapGuideY != nil {
@@ -7219,9 +7334,8 @@ class OverlayView: NSView {
             h = side
         }
 
-        let x = selectionStart.x < point.x ? selectionStart.x : selectionStart.x - w
-        let y = selectionStart.y < point.y ? selectionStart.y : selectionStart.y - h
-        var rect = NSRect(x: x, y: y, width: w, height: h)
+        var rect = CrossDisplaySelectionPolicy.selectionRect(
+            from: selectionStart, to: point, width: w, height: h)
         // Space reposition: the rect is moving rigidly, so snap the whole rect to
         // nearby image edges. The snap is applied only to the displayed rect, NOT
         // baked back into selectionStart — the logical anchor stays unsnapped so
@@ -7234,12 +7348,17 @@ class OverlayView: NSView {
         needsDisplay = true
     }
 
-    private func fixedPreSelectionRect(centeredAt point: NSPoint, pxW: Int, pxH: Int) -> NSRect {
+    private func fixedPreSelectionRect(
+        centeredAt point: NSPoint,
+        pxW: Int,
+        pxH: Int,
+        within bounds: NSRect
+    ) -> NSRect {
         let scale = window?.backingScaleFactor ?? 2.0
         var w = CGFloat(max(1, pxW)) / scale
         var h = CGFloat(max(1, pxH)) / scale
 
-        let canvasBounds = selectionBoundsInView
+        let canvasBounds = bounds
         if w > canvasBounds.width || h > canvasBounds.height {
             let s = min(canvasBounds.width / w, canvasBounds.height / h)
             w *= s
@@ -7266,6 +7385,7 @@ class OverlayView: NSView {
     /// tiny (no-move) rectangle.
     private func commitAnchoredSelection() {
         isAnchoredSelecting = false
+        lastRawSelectionPoint = nil
         if selectionRect.width > 5 || selectionRect.height > 5 {
             state = .selected
             applyPreSelectionLockAfterSelection()
@@ -7309,6 +7429,7 @@ class OverlayView: NSView {
     private func cancelAnchoredSelection() {
         guard isAnchoredSelecting else { return }
         isAnchoredSelecting = false
+        lastRawSelectionPoint = nil
         selectionRect = .zero
         state = .idle
         overlayDelegate?.overlayViewSelectionDidChange(.zero)
@@ -7334,6 +7455,7 @@ class OverlayView: NSView {
         }
         if state == .idle && shouldAllowNewSelection() {
             selectionStart = point
+            lastRawSelectionPoint = point
             selectionRect = NSRect(origin: point, size: .zero)
             state = .selecting
             isAnchoredSelecting = true
@@ -7519,6 +7641,7 @@ class OverlayView: NSView {
     // MARK: - Selection Resizing
 
     private func resizeSelection(to point: NSPoint, modifiers: NSEvent.ModifierFlags = []) {
+        let point = selectionPoint(point, modifiers: modifiers)
         let minSize: CGFloat = 10
         let r = selectionRect
         var newRect = r
@@ -7559,7 +7682,9 @@ class OverlayView: NSView {
 
         // Boundary snap (before aspect, so the locked ratio is preserved): snap
         // the dragged edge(s) to nearby strong image edges. Option bypasses.
-        if boundarySnapEnabled, !modifiers.contains(.option), let index = boundarySnapIndex {
+        if CrossDisplaySelectionPolicy.shouldApplyBoundarySnap(
+            enabled: boundarySnapEnabled, optionHeld: modifiers.contains(.option)),
+           let index = boundarySnapIndex {
             newRect = applyBoundarySnap(to: newRect, handle: resizeHandle, minSize: minSize, index: index)
         } else if boundarySnapGuideX != nil || boundarySnapGuideY != nil {
             boundarySnapGuideX = nil
@@ -7567,7 +7692,9 @@ class OverlayView: NSView {
         }
 
         if let aspect = lockedAspect, aspect > 0 {
-            newRect = constrainToAspect(newRect, aspect: aspect, handle: resizeHandle, minSize: minSize)
+            newRect = constrainToAspect(
+                newRect, aspect: aspect, handle: resizeHandle, minSize: minSize,
+                modifiers: modifiers)
         }
 
         selectionRect = newRect
@@ -7614,7 +7741,9 @@ class OverlayView: NSView {
     /// the snap-guide feedback. Returns the rect unchanged when snapping is off /
     /// Option is held / no index is built.
     func boundarySnappedMovedRect(_ rect: NSRect, modifiers: NSEvent.ModifierFlags) -> NSRect {
-        guard boundarySnapEnabled, !modifiers.contains(.option), let index = boundarySnapIndex else {
+        guard CrossDisplaySelectionPolicy.shouldApplyBoundarySnap(
+            enabled: boundarySnapEnabled, optionHeld: modifiers.contains(.option)),
+              let index = boundarySnapIndex else {
             if boundarySnapGuideX != nil || boundarySnapGuideY != nil {
                 boundarySnapGuideX = nil
                 boundarySnapGuideY = nil
@@ -7808,7 +7937,13 @@ class OverlayView: NSView {
     /// Adjust `rect` to the locked `aspect` (w/h), keeping the handle's anchor fixed.
     /// Corner handles keep the opposite corner fixed and drive from the dominant
     /// dimension; edge handles drive the dragged axis and center the other.
-    private func constrainToAspect(_ rect: NSRect, aspect: CGFloat, handle: ResizeHandle, minSize: CGFloat) -> NSRect {
+    private func constrainToAspect(
+        _ rect: NSRect,
+        aspect: CGFloat,
+        handle: ResizeHandle,
+        minSize: CGFloat,
+        modifiers: NSEvent.ModifierFlags
+    ) -> NSRect {
         var w = rect.width
         var h = rect.height
 
@@ -7826,7 +7961,7 @@ class OverlayView: NSView {
             w *= s; h *= s
         }
         // Shrink (ratio-preserved) if larger than the available display bounds.
-        let canvasBounds = selectionBoundsInView
+        let canvasBounds = selectionBounds(for: modifiers)
         if w > canvasBounds.width || h > canvasBounds.height {
             let s = min(canvasBounds.width / w, canvasBounds.height / h)
             w *= s; h *= s
@@ -7867,9 +8002,11 @@ class OverlayView: NSView {
             }
             hoveredTooltip = toolbarTooltipText(for: action, base: btn?.tooltipText)
             hoveredTooltipButtonView = btn
+            updateRemoteCaptureTooltip()
         } else {
             hoveredTooltip = nil
             hoveredTooltipButtonView = nil
+            captureRailTooltip.hide()
         }
         needsDisplay = true
     }
@@ -7890,6 +8027,7 @@ class OverlayView: NSView {
         if clearTooltip {
             hoveredTooltip = nil
             hoveredTooltipButtonView = nil
+            captureRailTooltip.hide()
         }
         bottomStripView?.clearInteractionState(
             suppressHoverUntilMouseMoved: suppressUntilMouseMoved,
@@ -7903,6 +8041,7 @@ class OverlayView: NSView {
     private func showMoveDragTooltip(anchor moveButton: ToolbarButtonView?) {
         hoveredTooltip = L("Release to finish")
         hoveredTooltipButtonView = moveButton
+        updateRemoteCaptureTooltip()
         needsDisplay = true
     }
 
@@ -7986,7 +8125,8 @@ class OverlayView: NSView {
         moved.origin = NSPoint(
             x: point.x - keyboardMoveSelectionOffset.x,
             y: point.y - keyboardMoveSelectionOffset.y)
-        selectionRect = boundarySnappedMovedRect(moved, modifiers: modifiers)
+        selectionRect = constrainedMovedSelection(
+            boundarySnappedMovedRect(moved, modifiers: modifiers), modifiers: modifiers)
         overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
         if webcamSetupPreview != nil { repositionWebcamSetupPreview() }
         updateResolutionBox()
@@ -8031,16 +8171,54 @@ class OverlayView: NSView {
         return strip.buttonViews.contains { $0 === btn }
     }
 
+    private func updateRemoteCaptureTooltip() {
+        guard !isEditorMode,
+              let tooltip = hoveredTooltip, !tooltip.isEmpty,
+              let btn = hoveredTooltipButtonView, let btnWindow = btn.window,
+              let owner = window, btnWindow !== owner,
+              !PopoverHelper.isVisible, toolOptionsPopoverController == nil else {
+            captureRailTooltip.hide()
+            return
+        }
+
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
+            .foregroundColor: ToolbarLayout.iconColor,
+        ]
+        let textSize = (tooltip as NSString).size(withAttributes: attrs)
+        let tipSize = NSSize(width: textSize.width + 12, height: textSize.height + 6)
+        let buttonFrame = btnWindow.convertToScreen(btn.convert(btn.bounds, to: nil))
+        let tipX = isButton(btn, inStrip: bottomStripView)
+            ? buttonFrame.maxX + 6
+            : buttonFrame.minX - tipSize.width - 6
+        let display = btnWindow.screen?.frame ?? owner.screen?.frame ?? owner.frame
+        let frame = NSRect(
+            x: max(display.minX + 2, min(tipX, display.maxX - tipSize.width - 2)),
+            y: max(display.minY + 2, min(buttonFrame.midY - tipSize.height / 2,
+                                         display.maxY - tipSize.height - 2)),
+            width: tipSize.width, height: tipSize.height)
+        captureRailTooltip.show(tooltip, in: frame, owner: owner)
+    }
+
     private func drawHoveredTooltip() {
         // In editor mode, tooltips are drawn via a floating NSView in the chrome parent
         if isEditorMode {
+            captureRailTooltip.hide()
             updateEditorTooltipView()
             return
         }
 
         guard let tooltip = hoveredTooltip, !tooltip.isEmpty,
               let btn = hoveredTooltipButtonView,
-              !PopoverHelper.isVisible else { return }
+              !PopoverHelper.isVisible else {
+            captureRailTooltip.hide()
+            return
+        }
+        if btn.window !== window {
+            updateRemoteCaptureTooltip()
+            return
+        }
+        captureRailTooltip.hide()
 
         let attrs: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 11, weight: .medium),
@@ -8052,19 +8230,7 @@ class OverlayView: NSView {
         let tipW = textSize.width + pad * 2
         let tipH = textSize.height + pad
 
-        // Convert the button's rect to OverlayView coordinates. The button may
-        // live in a separate glass chrome panel (different window), so go through
-        // screen coordinates rather than a same-window convert (which would
-        // misplace the tooltip far off, e.g. screen-left).
-        let btnFrame: NSRect
-        if let btnWindow = btn.window, let selfWindow = window, btnWindow !== selfWindow {
-            let inBtnWindow = btn.convert(btn.bounds, to: nil)
-            let screenRect = btnWindow.convertToScreen(inBtnWindow)
-            let inSelfWindow = selfWindow.convertFromScreen(screenRect)
-            btnFrame = convert(inSelfWindow, from: nil)
-        } else {
-            btnFrame = btn.convert(btn.bounds, to: self)
-        }
+        let btnFrame = btn.convert(btn.bounds, to: self)
         // The button is hosted in a strip; find which strip via the panel chain.
         let isBottomBar = isButton(btn, inStrip: bottomStripView)
         let tipRect: NSRect
@@ -8085,7 +8251,6 @@ class OverlayView: NSView {
             tipRect = NSRect(x: btnFrame.minX - tipW - 6, y: btnFrame.midY - tipH / 2, width: tipW, height: tipH)
         }
 
-        // Clamp to bounds
         let clamped = NSRect(
             x: max(bounds.minX + 2, min(tipRect.minX, bounds.maxX - tipW - 2)),
             y: max(bounds.minY + 2, min(tipRect.minY, bounds.maxY - tipH - 2)),
@@ -8558,7 +8723,9 @@ class OverlayView: NSView {
                 var moved = selectionRect
                 moved.origin = NSPoint(x: point.x - offset.x, y: point.y - offset.y)
                 // Snap the moved selection to nearby image edges (Option bypasses).
-                selectionRect = boundarySnappedMovedRect(moved, modifiers: event.modifierFlags)
+                selectionRect = constrainedMovedSelection(
+                    boundarySnappedMovedRect(moved, modifiers: event.modifierFlags),
+                    modifiers: event.modifierFlags)
                 overlayDelegate?.overlayViewSelectionDidChange(selectionRect)
                 if hasWebcam { repositionWebcamSetupPreview() }
                 updateResolutionBox()  // track the box live during the move drag
@@ -9416,6 +9583,13 @@ class OverlayView: NSView {
     // MARK: - Keyboard
 
     override func flagsChanged(with event: NSEvent) {
+        if state == .selecting, let point = lastRawSelectionPoint {
+            updateSelectionRect(
+                to: point,
+                shiftHeld: event.modifierFlags.contains(.shift),
+                modifiers: event.modifierFlags)
+        }
+
         // Re-apply shift constraint immediately when Shift is pressed/released during annotation drag
         if currentAnnotation != nil, let lastPoint = lastDragPoint {
             let shiftHeld = event.modifierFlags.contains(.shift)
@@ -10765,26 +10939,6 @@ extension OverlayView: AnnotationCanvas {
 // MARK: - TextEditingCanvas conformance
 
 extension OverlayView: TextEditingCanvas {}
-
-/// Small rounded-rect tooltip view used for editor mode toolbar hover labels.
-private class TooltipBackgroundView: NSView {
-    var text: String = ""
-
-    override func draw(_ dirtyRect: NSRect) {
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 11, weight: .medium),
-            .foregroundColor: ToolbarLayout.iconColor,
-        ]
-        if LiquidGlass.isEnabled {
-            NSColor(white: 0.1, alpha: 0.70).setFill()
-        } else {
-            ToolbarLayout.bgColor.setFill()
-        }
-        NSBezierPath(roundedRect: bounds, xRadius: 4, yRadius: 4).fill()
-        let pad: CGFloat = 6
-        (text as NSString).draw(at: NSPoint(x: pad, y: pad / 2), withAttributes: attrs)
-    }
-}
 
 /// Compact icon-only control shown in the pre-selection helper. It opens the
 /// same ratio/resolution presets as the selected-area size control without

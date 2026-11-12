@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "이동할 때 웹캠을 모서리에 맞추기";
 "Search emoji" = "이모티콘 검색";
+"Blur background outside selection" = "선택 영역 바깥의 배경 흐리게 하기";
+"Multi-Monitor Settings:" = "다중 모니터 설정:";
+"Span multiple monitors by default" = "기본적으로 여러 모니터에 걸치기";
+"Hold Option to span multiple monitors" = "여러 모니터에 걸치려면 Option 키를 길게 누르세요";
+"Hold Option to restrict to one monitor" = "한 모니터로 제한하려면 Option 키를 길게 누르세요";

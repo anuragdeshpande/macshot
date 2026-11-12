@@ -4,10 +4,12 @@ import XCTest
 final class LiquidGlassTests: XCTestCase {
 
     private var savedSetting: Any?
+    private var savedOutsideBlurSetting: Any?
 
     override func setUp() {
         super.setUp()
         savedSetting = UserDefaults.standard.object(forKey: LiquidGlass.defaultsKey)
+        savedOutsideBlurSetting = UserDefaults.standard.object(forKey: LiquidGlass.outsideBlurDefaultsKey)
     }
 
     override func tearDown() {
@@ -16,7 +18,37 @@ final class LiquidGlassTests: XCTestCase {
         } else {
             UserDefaults.standard.removeObject(forKey: LiquidGlass.defaultsKey)
         }
+        if let savedOutsideBlurSetting {
+            UserDefaults.standard.set(savedOutsideBlurSetting, forKey: LiquidGlass.outsideBlurDefaultsKey)
+        } else {
+            UserDefaults.standard.removeObject(forKey: LiquidGlass.outsideBlurDefaultsKey)
+        }
         super.tearDown()
+    }
+
+    func testOutsideBlurDefaultsOnAndPersistsAcrossAppearanceChanges() {
+        UserDefaults.standard.removeObject(forKey: LiquidGlass.outsideBlurDefaultsKey)
+        XCTAssertTrue(LiquidGlass.prefersOutsideBlur)
+
+        LiquidGlass.setStyle(.default)
+        XCTAssertFalse(LiquidGlass.showsOutsideBlur)
+
+        guard LiquidGlass.isAvailable else { return }
+
+        LiquidGlass.setStyle(.liquidGlass)
+        XCTAssertTrue(LiquidGlass.showsOutsideBlur)
+
+        UserDefaults.standard.set(false, forKey: LiquidGlass.outsideBlurDefaultsKey)
+        XCTAssertFalse(LiquidGlass.showsOutsideBlur)
+
+        LiquidGlass.setStyle(.default)
+        XCTAssertFalse(LiquidGlass.prefersOutsideBlur)
+        LiquidGlass.setStyle(.liquidGlass)
+        XCTAssertFalse(LiquidGlass.showsOutsideBlur)
+        XCTAssertEqual(
+            UserDefaults.standard.object(forKey: LiquidGlass.outsideBlurDefaultsKey) as? Bool,
+            false
+        )
     }
 
     @MainActor

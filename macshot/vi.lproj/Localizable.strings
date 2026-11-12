@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Bám webcam vào các góc khi di chuyển";
 "Search emoji" = "Tìm biểu tượng cảm xúc";
+"Blur background outside selection" = "Làm mờ nền bên ngoài vùng chọn";
+"Multi-Monitor Settings:" = "Cài đặt nhiều màn hình:";
+"Span multiple monitors by default" = "Mặc định trải rộng trên nhiều màn hình";
+"Hold Option to span multiple monitors" = "Giữ phím Option để trải rộng trên nhiều màn hình";
+"Hold Option to restrict to one monitor" = "Giữ phím Option để giới hạn ở một màn hình";

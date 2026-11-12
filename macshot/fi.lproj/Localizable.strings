@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Kohdista verkkokamera kulmiin siirrettäessä";
 "Search emoji" = "Hae emojia";
+"Blur background outside selection" = "Sumenna valinnan ulkopuolinen tausta";
+"Multi-Monitor Settings:" = "Usean näytön asetukset:";
+"Span multiple monitors by default" = "Laajenna oletusarvoisesti usealle näytölle";
+"Hold Option to span multiple monitors" = "Pidä Option-näppäintä painettuna, jotta valinta ulottuu usealle näytölle";
+"Hold Option to restrict to one monitor" = "Pidä Option-näppäintä painettuna, jotta valinta rajautuu yhdelle näytölle";

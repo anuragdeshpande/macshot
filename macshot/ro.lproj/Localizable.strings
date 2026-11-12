@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Aliniază webcamul la colțuri când este mutat";
 "Search emoji" = "Caută emoji";
+"Blur background outside selection" = "Estompează fundalul din afara selecției";
+"Multi-Monitor Settings:" = "Setări pentru mai multe monitoare:";
+"Span multiple monitors by default" = "Extinde implicit pe mai multe monitoare";
+"Hold Option to span multiple monitors" = "Ține apăsat Option pentru a acoperi mai multe monitoare";
+"Hold Option to restrict to one monitor" = "Ține apăsat Option pentru a limita la un singur monitor";

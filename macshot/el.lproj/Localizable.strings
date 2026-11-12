@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "Προσκόλληση της κάμερας στις γωνίες κατά τη μετακίνηση";
 "Search emoji" = "Αναζήτηση emoji";
+"Blur background outside selection" = "Θόλωσε το φόντο έξω από την επιλογή";
+"Multi-Monitor Settings:" = "Ρυθμίσεις πολλαπλών οθονών:";
+"Span multiple monitors by default" = "Κάλυψε πολλές οθόνες από προεπιλογή";
+"Hold Option to span multiple monitors" = "Κρατήστε πατημένο το πλήκτρο Option για να καλύψετε πολλές οθόνες";
+"Hold Option to restrict to one monitor" = "Κρατήστε πατημένο το πλήκτρο Option για να περιορίσετε την επιλογή σε μία οθόνη";

@@ -55,6 +55,48 @@ final class BoundarySnapIndexTests: XCTestCase {
                      "snapping must not yank the selection across the screen")
     }
 
+    func testVerticalSnapUsesTheActualPointerPositionBeyondEitherDisplayEdge() throws {
+        let drawRect = NSRect(x: -20, y: 30, width: 200, height: 160)
+        for scale in [1, 2] {
+            for edge in [1, 199] {
+                let image = edgedImage(width: 200 * scale, height: 160 * scale,
+                                       edgeX: edge * scale, edgeY: 60 * scale)
+                let index = try XCTUnwrap(BoundarySnapIndex.build(from: image, drawRect: drawRect))
+                let edgeX = drawRect.minX + CGFloat(edge)
+                let direction: CGFloat = edge == 1 ? -1 : 1
+                let near = index.nearestVertical(
+                    toViewX: edgeX + direction * 3, yMinView: 110, yMaxView: 170, radiusPoints: 4)
+                XCTAssertEqual(near?.viewPosition, edgeX, "a genuinely nearby edge must still snap")
+                XCTAssertNil(index.nearestVertical(
+                    toViewX: edgeX + direction * 5, yMinView: 110, yMaxView: 170, radiusPoints: 4))
+                XCTAssertNil(index.nearestVertical(
+                    toViewX: edgeX + direction * 200, yMinView: 110, yMaxView: 170, radiusPoints: 4),
+                    "a drag onto another display must not snap back to the original display")
+            }
+        }
+    }
+
+    func testHorizontalSnapUsesTheActualPointerPositionBeyondEitherDisplayEdge() throws {
+        let drawRect = NSRect(x: -20, y: 30, width: 200, height: 160)
+        for scale in [1, 2] {
+            for edge in [1, 159] {
+                let image = edgedImage(width: 200 * scale, height: 160 * scale,
+                                       edgeX: 80 * scale, edgeY: edge * scale)
+                let index = try XCTUnwrap(BoundarySnapIndex.build(from: image, drawRect: drawRect))
+                let edgeY = drawRect.minY + CGFloat(edge)
+                let direction: CGFloat = edge == 1 ? -1 : 1
+                let near = index.nearestHorizontal(
+                    toViewY: edgeY + direction * 3, xMinView: -10, xMaxView: 40, radiusPoints: 4)
+                XCTAssertEqual(near?.viewPosition, edgeY, "a genuinely nearby edge must still snap")
+                XCTAssertNil(index.nearestHorizontal(
+                    toViewY: edgeY + direction * 5, xMinView: -10, xMaxView: 40, radiusPoints: 4))
+                XCTAssertNil(index.nearestHorizontal(
+                    toViewY: edgeY + direction * 200, xMinView: -10, xMaxView: 40, radiusPoints: 4),
+                    "a drag onto another display must not snap back to the original display")
+            }
+        }
+    }
+
     func testDegenerateImagesAreRefused() throws {
         let onePixel = ImageProbe.solidImage(width: 1, height: 1)
             .cgImage(forProposedRect: nil, context: nil, hints: nil)!

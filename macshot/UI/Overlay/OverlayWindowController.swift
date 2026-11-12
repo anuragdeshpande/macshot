@@ -350,9 +350,16 @@ class OverlayWindowController {
         overlayView?.needsDisplay = true
     }
 
-    func setRemoteSelection(_ rect: NSRect, fullRect: NSRect = .zero) {
+    func setRemoteSelection(
+        _ rect: NSRect,
+        fullRect: NSRect = .zero,
+        originScreenFrame: NSRect? = nil
+    ) {
         overlayView?.remoteSelectionRect = rect
         overlayView?.remoteSelectionFullRect = fullRect.width >= 1 ? fullRect : rect
+        overlayView?.remoteSelectionOriginBounds = originScreenFrame.map {
+            $0.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
+        }
         if rect.width >= 1 && rect.height >= 1 {
             overlayView?.hoveredSnapRect = nil
         }

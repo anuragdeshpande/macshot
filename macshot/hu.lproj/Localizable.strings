@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Webkamera sarkokhoz igazítása mozgatáskor";
 "Search emoji" = "Emoji keresése";
+"Blur background outside selection" = "A kijelölésen kívüli háttér elmosása";
+"Multi-Monitor Settings:" = "Többmonitoros beállítások:";
+"Span multiple monitors by default" = "Több monitor átfogása alapértelmezés szerint";
+"Hold Option to span multiple monitors" = "Több monitor átfogásához tartsa lenyomva az Option billentyűt";
+"Hold Option to restrict to one monitor" = "Egy monitorra korlátozáshoz tartsa lenyomva az Option billentyűt";

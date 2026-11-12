@@ -128,7 +128,9 @@ struct BoundarySnapIndex {
     /// is the snap radius in overlay points.
     func nearestVertical(toViewX viewX: CGFloat, yMinView: CGFloat, yMaxView: CGFloat,
                          radiusPoints: CGFloat) -> Hit? {
-        let center = pixelX(viewX)
+        guard viewX >= drawRect.minX - radiusPoints, viewX <= drawRect.maxX + radiusPoints else { return nil }
+        // Keep the search center unclamped: the pointer may be on another display.
+        let center = Int(((viewX - drawRect.minX) * scaleX).rounded())
         let radiusPx = max(1, Int((radiusPoints * scaleX).rounded()))
         var y0 = pixelY(max(yMinView, yMaxView))   // larger view-Y → smaller pixel-Y
         var y1 = pixelY(min(yMinView, yMaxView))
@@ -167,7 +169,8 @@ struct BoundarySnapIndex {
     /// strength along the selection's [xMinView, xMaxView] span.
     func nearestHorizontal(toViewY viewY: CGFloat, xMinView: CGFloat, xMaxView: CGFloat,
                            radiusPoints: CGFloat) -> Hit? {
-        let center = pixelY(viewY)
+        guard viewY >= drawRect.minY - radiusPoints, viewY <= drawRect.maxY + radiusPoints else { return nil }
+        let center = Int(((drawRect.maxY - viewY) * scaleY).rounded())
         let radiusPx = max(1, Int((radiusPoints * scaleY).rounded()))
         var x0 = pixelX(min(xMinView, xMaxView))
         var x1 = pixelX(max(xMinView, xMaxView))

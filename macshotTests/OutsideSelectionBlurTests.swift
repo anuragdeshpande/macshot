@@ -21,7 +21,10 @@ final class OutsideSelectionBlurTests: XCTestCase {
     private func renderOverlay(
         image: NSImage,
         usesExternalScreenshotPreview: Bool,
-        remoteSelectionRect: NSRect? = nil
+        remoteSelectionRect: NSRect? = nil,
+        glass: Bool = true,
+        blur: Bool = true,
+        shadowDisabled: Bool = false
     ) throws -> NSBitmapImageRep {
         let bounds = NSRect(x: 0, y: 0, width: width, height: height)
         let source = try XCTUnwrap(image.cgImage(forProposedRect: nil, context: nil, hints: nil))
@@ -49,7 +52,12 @@ final class OutsideSelectionBlurTests: XCTestCase {
         )!
         let graphics = NSGraphicsContext(bitmapImageRep: overlayBitmap)!
 
-        withDefaults(["hideCaptureInstructions": true, "disableSelectionOutsideShadow": false]) {
+        withDefaults([
+            "hideCaptureInstructions": true,
+            "disableSelectionOutsideShadow": shadowDisabled,
+            LiquidGlass.defaultsKey: glass,
+            LiquidGlass.outsideBlurDefaultsKey: blur,
+        ]) {
             NSGraphicsContext.saveGraphicsState()
             defer { NSGraphicsContext.restoreGraphicsState() }
             NSGraphicsContext.current = graphics
@@ -102,6 +110,7 @@ final class OutsideSelectionBlurTests: XCTestCase {
     }
 
     func testOverlayDrawBlursOutsideSelectionInInternalScreenshotMode() throws {
+        try XCTSkipIf(!LiquidGlass.isAvailable, "Liquid Glass requires macOS 26")
         let bitmap = try renderOverlay(image: contrastImage(), usesExternalScreenshotPreview: false)
         let outsideEdge = try XCTUnwrap(bitmap.colorAt(x: 82, y: 60)?.usingColorSpace(.deviceRGB))
 
@@ -113,6 +122,7 @@ final class OutsideSelectionBlurTests: XCTestCase {
     }
 
     func testOverlayDrawBlursOutsideSelectionWithExternalScreenshotPreview() throws {
+        try XCTSkipIf(!LiquidGlass.isAvailable, "Liquid Glass requires macOS 26")
         let bitmap = try renderOverlay(image: contrastImage(), usesExternalScreenshotPreview: true)
         let outsideEdge = try XCTUnwrap(bitmap.colorAt(x: 82, y: 60)?.usingColorSpace(.deviceRGB))
         XCTAssertLessThan(
@@ -123,6 +133,7 @@ final class OutsideSelectionBlurTests: XCTestCase {
     }
 
     func testOverlayDrawKeepsRemoteSelectionSharpInInternalScreenshotMode() throws {
+        try XCTSkipIf(!LiquidGlass.isAvailable, "Liquid Glass requires macOS 26")
         let remoteSelection = NSRect(x: 30, y: 20, width: 100, height: 80)
         let bitmap = try renderOverlay(
             image: contrastImage(),
@@ -144,6 +155,7 @@ final class OutsideSelectionBlurTests: XCTestCase {
     }
 
     func testOverlayDrawKeepsRemoteSelectionSharpAndBlursOutsideExternalPreview() throws {
+        try XCTSkipIf(!LiquidGlass.isAvailable, "Liquid Glass requires macOS 26")
         let remoteSelection = NSRect(x: 30, y: 20, width: 100, height: 80)
         let bitmap = try renderOverlay(
             image: contrastImage(),
@@ -162,5 +174,28 @@ final class OutsideSelectionBlurTests: XCTestCase {
             0.25,
             "The live preview contrast edge outside the remote selection must be blurred."
         )
+    }
+
+    func testDefaultShadowKeepsOutsideEdgesSharp() throws {
+        for external in [false, true] {
+            for (glass, blur) in [(false, false), (false, true), (true, false)] {
+                let bitmap = try renderOverlay(
+                    image: contrastImage(), usesExternalScreenshotPreview: external, glass: glass, blur: blur)
+                let black = try XCTUnwrap(bitmap.colorAt(x: 78, y: 60)?.usingColorSpace(.deviceRGB))
+                let white = try XCTUnwrap(bitmap.colorAt(x: 82, y: 60)?.usingColorSpace(.deviceRGB))
+                XCTAssertLessThan(black.redComponent, 0.05)
+                XCTAssertEqual(white.redComponent, 0.55, accuracy: 0.06,
+                               "the normal shadow must not blur the captured background")
+            }
+        }
+    }
+
+    func testDisabledShadowAlsoDisablesOutsideBlur() throws {
+        let bitmap = try renderOverlay(
+            image: contrastImage(), usesExternalScreenshotPreview: false, shadowDisabled: true)
+        let black = try XCTUnwrap(bitmap.colorAt(x: 78, y: 60)?.usingColorSpace(.deviceRGB))
+        let white = try XCTUnwrap(bitmap.colorAt(x: 82, y: 60)?.usingColorSpace(.deviceRGB))
+        XCTAssertLessThan(black.redComponent, 0.05)
+        XCTAssertGreaterThan(white.redComponent, 0.95)
     }
 }

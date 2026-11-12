@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Prichytiť webkameru k rohom pri presúvaní";
 "Search emoji" = "Hľadať emoji";
+"Blur background outside selection" = "Rozmazať pozadie mimo výberu";
+"Multi-Monitor Settings:" = "Nastavenia viacerých monitorov:";
+"Span multiple monitors by default" = "Zahrnúť viacero monitorov v predvolenom nastavení";
+"Hold Option to span multiple monitors" = "Podržaním klávesu Option rozšírite výber cez viacero monitorov";
+"Hold Option to restrict to one monitor" = "Podržaním klávesu Option obmedzíte výber na jeden monitor";

@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "Привязывать веб-камеру к углам при перемещении";
 "Search emoji" = "Поиск эмодзи";
+"Blur background outside selection" = "Размыть фон за пределами выделения";
+"Multi-Monitor Settings:" = "Настройки нескольких мониторов:";
+"Span multiple monitors by default" = "По умолчанию охватывать несколько мониторов";
+"Hold Option to span multiple monitors" = "Удерживайте клавишу Option, чтобы охватить несколько мониторов";
+"Hold Option to restrict to one monitor" = "Удерживайте клавишу Option, чтобы ограничить выбор одним монитором";

@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "वेबकैम को खिसकाते समय कोनों से चिपकाएँ";
 "Search emoji" = "इमोजी खोजें";
+"Blur background outside selection" = "चयन के बाहर की पृष्ठभूमि धुंधली करें";
+"Multi-Monitor Settings:" = "अनेक मॉनिटर की सेटिंग:";
+"Span multiple monitors by default" = "डिफ़ॉल्ट रूप से कई मॉनिटर पर फैलाएँ";
+"Hold Option to span multiple monitors" = "कई मॉनिटर पर फैलाने के लिए Option कुंजी दबाए रखें";
+"Hold Option to restrict to one monitor" = "एक मॉनिटर तक सीमित रखने के लिए Option कुंजी दबाए रखें";

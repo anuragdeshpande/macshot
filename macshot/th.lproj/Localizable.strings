@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "จัดเว็บแคมให้ชิดมุมเมื่อย้าย";
 "Search emoji" = "ค้นหาอีโมจิ";
+"Blur background outside selection" = "เบลอพื้นหลังนอกพื้นที่ที่เลือก";
+"Multi-Monitor Settings:" = "การตั้งค่าหลายจอภาพ:";
+"Span multiple monitors by default" = "ขยายให้ครอบคลุมหลายจอภาพเป็นค่าเริ่มต้น";
+"Hold Option to span multiple monitors" = "กดปุ่ม Option ค้างไว้เพื่อขยายครอบคลุมหลายจอภาพ";
+"Hold Option to restrict to one monitor" = "กดปุ่ม Option ค้างไว้เพื่อจำกัดให้เหลือจอภาพเดียว";

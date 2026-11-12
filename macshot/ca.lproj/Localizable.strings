@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "Ajusta la càmera web a les cantonades en moure-la";
 "Search emoji" = "Cerca emojis";
+"Blur background outside selection" = "Desenfoca el fons fora de la selecció";
+"Multi-Monitor Settings:" = "Configuració de diversos monitors:";
+"Span multiple monitors by default" = "Abasta diversos monitors per defecte";
+"Hold Option to span multiple monitors" = "Mantén premuda la tecla Option per abastar diversos monitors";
+"Hold Option to restrict to one monitor" = "Mantén premuda la tecla Option per limitar-ho a un sol monitor";

@@ -22,6 +22,7 @@ enum LiquidGlass {
     }
 
     static let defaultsKey = "liquidGlassTheme"
+    static let outsideBlurDefaultsKey = "liquidGlassOutsideBlur"
 
     /// True only on macOS 26+ where the native `NSGlassEffectView` API exists.
     static var isAvailable: Bool {
@@ -32,6 +33,15 @@ enum LiquidGlass {
     /// True when the user has selected Liquid Glass AND the API is available.
     static var isEnabled: Bool {
         isAvailable && UserDefaults.standard.bool(forKey: defaultsKey)
+    }
+
+    static var prefersOutsideBlur: Bool {
+        UserDefaults.standard.object(forKey: outsideBlurDefaultsKey) as? Bool ?? true
+    }
+
+    /// True when Liquid Glass is enabled and the user prefers blur outside the selection.
+    static var showsOutsideBlur: Bool {
+        isEnabled && prefersOutsideBlur
     }
 
     static var currentStyle: Style {

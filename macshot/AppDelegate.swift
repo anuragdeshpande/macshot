@@ -3498,7 +3498,10 @@ extension AppDelegate: OverlayWindowControllerDelegate {
                                    y: globalRect.origin.y - otherOrigin.y,
                                    width: globalRect.width, height: globalRect.height)
             let clipped = localRect.intersection(NSRect(origin: .zero, size: other.screen.frame.size))
-            other.setRemoteSelection(clipped.isEmpty ? .zero : clipped, fullRect: localRect)
+            other.setRemoteSelection(
+                clipped.isEmpty ? .zero : clipped,
+                fullRect: localRect,
+                originScreenFrame: controller.screen.frame)
         }
     }
 
@@ -3518,7 +3521,10 @@ extension AppDelegate: OverlayWindowControllerDelegate {
                                    y: globalRect.origin.y - otherOrigin.y,
                                    width: globalRect.width, height: globalRect.height)
             let clipped = localRect.intersection(NSRect(origin: .zero, size: other.screen.frame.size))
-            other.setRemoteSelection(clipped.isEmpty ? .zero : clipped, fullRect: localRect)
+            other.setRemoteSelection(
+                clipped.isEmpty ? .zero : clipped,
+                fullRect: localRect,
+                originScreenFrame: primary.screen.frame)
         }
     }
 
@@ -3543,7 +3549,10 @@ extension AppDelegate: OverlayWindowControllerDelegate {
                                    y: primaryGlobal.origin.y - otherOrigin.y,
                                    width: primaryGlobal.width, height: primaryGlobal.height)
             let clipped = localRect.intersection(NSRect(origin: .zero, size: other.screen.frame.size))
-            other.setRemoteSelection(clipped.isEmpty ? .zero : clipped, fullRect: localRect)
+            other.setRemoteSelection(
+                clipped.isEmpty ? .zero : clipped,
+                fullRect: localRect,
+                originScreenFrame: primary.screen.frame)
         }
     }
 

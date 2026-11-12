@@ -91,6 +91,7 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     private var doubleClickToCopyCheckbox: NSButton!
     private var hideCaptureInstructionsCheckbox: NSButton!
     private var disableSelectionShadowCheckbox: NSButton!
+    private var spanMultipleMonitorsCheckbox: NSButton!
     private var filenameTemplateField: NSTextField!
     private var filenameTemplatePreview: NSTextField!
     private var recordingFilenameTemplateField: NSTextField!
@@ -101,6 +102,8 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     private var iconColorWell: NSColorWell!
     private var bgColorWell: NSColorWell!
     private var appearanceStylePopup: NSPopUpButton?
+    private var liquidGlassOutsideBlurCheckbox: NSButton?
+    private var liquidGlassOutsideBlurRow: NSView?
     private var themePresetPopup: NSPopUpButton!
     private var quickModePopup: NSPopUpButton!
     private var quickCaptureOpenEditorCheckbox: NSButton!
@@ -535,6 +538,18 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
             appearanceStylePopup = stylePopup
             stack.addArrangedSubview(indented(labeledRow("\(L("Style")):", controls: [stylePopup])))
             stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
+
+            let outsideBlurCheckbox = NSButton(
+                checkboxWithTitle: L("Blur background outside selection"),
+                target: self,
+                action: #selector(liquidGlassOutsideBlurChanged(_:)))
+            outsideBlurCheckbox.state = LiquidGlass.prefersOutsideBlur ? .on : .off
+            let outsideBlurRow = indented(outsideBlurCheckbox)
+            outsideBlurRow.isHidden = !LiquidGlass.isEnabled
+            liquidGlassOutsideBlurCheckbox = outsideBlurCheckbox
+            liquidGlassOutsideBlurRow = outsideBlurRow
+            stack.addArrangedSubview(outsideBlurRow)
+            stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
         }
 
         // Theme preset dropdown
@@ -795,6 +810,15 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         ocrActionPopup.action = #selector(ocrActionChanged(_:))
 
         stack.addArrangedSubview(labeledRow(L("OCR & QR Capture:"), controls: [ocrActionPopup]))
+        stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
+
+        spanMultipleMonitorsCheckbox = NSButton(
+            checkboxWithTitle: L("Span multiple monitors by default"),
+            target: self,
+            action: #selector(spanMultipleMonitorsChanged(_:)))
+        spanMultipleMonitorsCheckbox.state =
+            UserDefaults.standard.bool(forKey: "spanMultipleMonitorsByDefault") ? .on : .off
+        stack.addArrangedSubview(labeledRow(L("Multi-Monitor Settings:"), controls: [spanMultipleMonitorsCheckbox]))
         stack.setCustomSpacing(12, after: stack.arrangedSubviews.last!)
 
         // Checkboxes
@@ -2661,6 +2685,8 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
             UserDefaults.standard.set(legacyAutoCopy ? 0 : 1, forKey: "ocrAction")
         }
         ocrActionPopup.selectItem(at: UserDefaults.standard.integer(forKey: "ocrAction"))
+        spanMultipleMonitorsCheckbox.state =
+            (UserDefaults.standard.object(forKey: "spanMultipleMonitorsByDefault") as? Bool ?? false) ? .on : .off
         captureMenuOrder = CaptureMenuItemID.orderedItems()
         rebuildCaptureMenuOrderRows()
 
@@ -2729,6 +2755,8 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
         bgColorWell.color = ToolbarLayout.bgColor
         bgColorWell.isEnabled = !LiquidGlass.isEnabled
         appearanceStylePopup?.selectItem(at: LiquidGlass.isEnabled ? 1 : 0)
+        liquidGlassOutsideBlurCheckbox?.state = LiquidGlass.prefersOutsideBlur ? .on : .off
+        updateLiquidGlassOutsideBlurVisibility()
 
         let historySize = UserDefaults.standard.object(forKey: "historySize") as? Int ?? 10
         historySizeField.integerValue = historySize
@@ -2859,6 +2887,9 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
 
     @objc private func ocrActionChanged(_ sender: NSPopUpButton) {
         UserDefaults.standard.set(sender.indexOfSelectedItem, forKey: "ocrAction")
+    }
+    @objc private func spanMultipleMonitorsChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: "spanMultipleMonitorsByDefault")
     }
     @objc private func saveActionChanged(_ sender: NSPopUpButton) {
         guard let raw = sender.selectedItem?.representedObject as? Int,
@@ -3068,8 +3099,18 @@ class SettingsWindowController: NSWindowController, NSToolbarDelegate, NSWindowD
     @objc private func appearanceStyleChanged(_ sender: NSPopUpButton) {
         LiquidGlass.setEnabled(sender.indexOfSelectedItem == 1)
         bgColorWell.isEnabled = !LiquidGlass.isEnabled
+        updateLiquidGlassOutsideBlurVisibility()
         notifyToolbarColorChange()
     }
+
+    private func updateLiquidGlassOutsideBlurVisibility() {
+        liquidGlassOutsideBlurRow?.isHidden = !LiquidGlass.isEnabled
+    }
+
+    @objc private func liquidGlassOutsideBlurChanged(_ sender: NSButton) {
+        UserDefaults.standard.set(sender.state == .on, forKey: LiquidGlass.outsideBlurDefaultsKey)
+    }
+
     @objc private func accentColorChanged(_ sender: NSColorWell) {
         ToolbarLayout.saveAccentColor(sender.color)
         notifyToolbarColorChange()

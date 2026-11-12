@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "چسباندن وب‌کم به گوشه‌ها هنگام جابه‌جایی";
 "Search emoji" = "جستجوی ایموجی";
+"Blur background outside selection" = "پس‌زمینه را بیرون از ناحیهٔ انتخاب‌شده تار کنید";
+"Multi-Monitor Settings:" = "تنظیمات چند نمایشگر:";
+"Span multiple monitors by default" = "به‌طور پیش‌فرض روی چند نمایشگر امتداد دهید";
+"Hold Option to span multiple monitors" = "برای گسترش روی چند نمایشگر، کلید Option را نگه دارید";
+"Hold Option to restrict to one monitor" = "برای محدود کردن به یک نمایشگر، کلید Option را نگه دارید";

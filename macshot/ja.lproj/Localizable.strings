@@ -859,3 +859,8 @@
 
 "Snap webcam to corners when moved" = "移動時にウェブカメラを四隅にスナップ";
 "Search emoji" = "絵文字を検索";
+"Blur background outside selection" = "選択範囲の外側の背景をぼかす";
+"Multi-Monitor Settings:" = "複数モニターの設定:";
+"Span multiple monitors by default" = "デフォルトで複数のモニターにまたがるようにする";
+"Hold Option to span multiple monitors" = "複数のモニターにまたがるにはOptionキーを押し続けてください";
+"Hold Option to restrict to one monitor" = "1台のモニターに制限するにはOptionキーを押し続けてください";

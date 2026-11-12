@@ -861,3 +861,8 @@
 
 "Snap webcam to corners when moved" = "محاذاة كاميرا الويب إلى الزوايا عند تحريكها";
 "Search emoji" = "ابحث عن رمز تعبيري";
+"Blur background outside selection" = "تمويه الخلفية خارج التحديد";
+"Multi-Monitor Settings:" = "إعدادات الشاشات المتعددة:";
+"Span multiple monitors by default" = "تمديد التحديد عبر عدة شاشات افتراضيًا";
+"Hold Option to span multiple monitors" = "اضغط باستمرار على مفتاح Option لتوسيع التحديد عبر عدة شاشات";
+"Hold Option to restrict to one monitor" = "اضغط باستمرار على مفتاح Option لقصر التحديد على شاشة واحدة";
